@@ -814,10 +814,15 @@ namespace TinyGenerator.Services
             checkerUserSb.AppendLine("=== OUTPUT DELL'AGENTE ===");
             checkerUserSb.AppendLine(modelOutput);
             checkerUserSb.AppendLine();
+            var semanticRules = (rules ?? Array.Empty<ResponseValidationRule>())
+                .Where(r => r != null && !string.IsNullOrWhiteSpace(r.Text) && !IsCheckerFormatRule(r.Text))
+                .OrderBy(r => r.Id)
+                .ToList();
+
             checkerUserSb.AppendLine("=== REGOLE ===");
-            if (rules != null && rules.Count > 0)
+            if (semanticRules.Count > 0)
             {
-                foreach (var r in rules.OrderBy(r => r.Id))
+                foreach (var r in semanticRules)
                 {
                     checkerUserSb.AppendLine($"REGOLA {r.Id}: {r.Text}");
                 }
@@ -854,6 +859,19 @@ namespace TinyGenerator.Services
                     NeedsRetry = true
                 };
             }
+        }
+
+        private static bool IsCheckerFormatRule(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            var normalized = text.Trim();
+            return normalized.Contains("formato richiesto", StringComparison.OrdinalIgnoreCase)
+                   || normalized.Contains("json", StringComparison.OrdinalIgnoreCase)
+                   || normalized.Contains("schema", StringComparison.OrdinalIgnoreCase);
         }
 
         public async Task<double?> CalculateSemanticAlignmentAsync(string text1, string text2)

@@ -83,6 +83,18 @@
                 border-color: #cfcfcf;
             }
             #pager .page-item.disabled .page-link { opacity: 0.6; }
+
+            .story-running-gear {
+                display: inline-block;
+                color: #0d6efd;
+                animation: story-gear-spin 1.2s linear infinite;
+                transform-origin: 50% 50%;
+            }
+
+            @@keyframes story-gear-spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
         </style>
         @{
             var orderedStatuses = (Model.Statuses ?? new List<StoryStatus>())
@@ -141,6 +153,12 @@
                             @((DateTime.TryParse(s.LastErrorDate, out var _errDt)) ? _errDt.ToString("dd/MM/yyyy HH:mm") : (!string.IsNullOrWhiteSpace(s.LastErrorDate) ? s.LastErrorDate : "-"))
                         </td>
                         <td data-col="assets">
+                            @if (Model.IsStoryRunning(s.Id))
+                            {
+                                <span title="Processo in esecuzione" class="me-1">
+                                    <i class="bi bi-gear-fill story-running-gear"></i>
+                                </span>
+                            }
                             @if (!string.IsNullOrWhiteSpace(s.StoryTagged)) { <span title="Story tagged" class="text-dark me-1"><i class="bi bi-tags-fill"></i></span>; }
                             @if (s.GeneratedTtsJson) { <span title="TTS JSON" class="text-primary me-1"><i class="bi bi-file-earmark-text-fill"></i></span>; }
                             @if (s.GeneratedTts) {

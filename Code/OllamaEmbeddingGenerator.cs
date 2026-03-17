@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using TinyGenerator.Configuration;
 
 namespace TinyGenerator.Services
 {
@@ -27,8 +28,7 @@ namespace TinyGenerator.Services
             _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
             _logger = logger;
             _fallbackEndpoint = configuration["Memory:EmbeddingEndpoint"]
-                ?? configuration["Ollama:endpoint"]
-                ?? "http://localhost:11434";
+                ?? ExternalServerConfig.GetRequiredValue(configuration, "Ollama:Endpoint");
         }
 
         public async Task<float[]> GenerateAsync(string text, CancellationToken cancellationToken = default)

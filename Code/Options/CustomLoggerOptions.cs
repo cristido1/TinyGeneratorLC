@@ -13,5 +13,9 @@ namespace TinyGenerator.Services
         public bool LogToolResponses { get; set; } = true;
         // Enable logging of other signals (e.g., progress, info)
         public bool OtherLogs { get; set; } = false;
+        // Suppress identical persisted log entries within a short rolling window to avoid DB floods.
+        public bool EnableDuplicateSuppression { get; set; } = true;
+        public int DuplicateWindowSeconds { get; set; } = 30;
+        public int MaxIdenticalEntriesPerWindow { get; set; } = 3;
     }
 }

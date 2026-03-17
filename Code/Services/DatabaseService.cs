@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using TinyGenerator.Models;
 using TinyGenerator.Data;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Threading.Tasks;
 using ModelInfo = TinyGenerator.Models.ModelInfo;
@@ -52,6 +53,28 @@ public sealed class DatabaseService
     private List<TinyGenerator.Models.Agent>? _agentsCache;
     private DateTime _agentsCacheExpiresUtc = DateTime.MinValue;
     private static readonly TimeSpan AgentsCacheTtl = TimeSpan.FromMinutes(20);
+
+    // In-memory cache for narrative story blocks (no DB persistence)
+    private readonly ConcurrentDictionary<long, List<NarrativeStoryBlockDto>> _narrativeBlocksCache = new ConcurrentDictionary<long, List<NarrativeStoryBlockDto>>();
+    private long _narrativeBlocksNextId = 0;
+    // In-memory cache for story resource states (no DB persistence)
+    private readonly ConcurrentDictionary<long, List<StoryResourceState>> _storyResourceStatesCache = new ConcurrentDictionary<long, List<StoryResourceState>>();
+    private long _storyResourceStatesNextId = 0;
+    // In-memory cache for narrative agent call logs (runtime only)
+    private readonly ConcurrentDictionary<long, List<NarrativeAgentCallLogDto>> _narrativeAgentCallsCache = new ConcurrentDictionary<long, List<NarrativeAgentCallLogDto>>();
+    private long _narrativeAgentCallsNextId = 0;
+    // In-memory cache for narrative planning states (runtime/planning)
+    private readonly ConcurrentDictionary<int, List<NarrativePlanningStateDto>> _narrativePlanningStatesCache = new ConcurrentDictionary<int, List<NarrativePlanningStateDto>>();
+    private long _narrativePlanningStatesNextId = 0;
+    // In-memory cache for chunk facts (derivable data)
+    private readonly ConcurrentDictionary<long, List<ChunkFacts>> _chunkFactsCache = new ConcurrentDictionary<long, List<ChunkFacts>>();
+    private long _chunkFactsNextId = 0;
+    // In-memory cache for short-term memory entries
+    private readonly ConcurrentDictionary<long, List<MemoryEntry>> _memoryEntriesCache = new ConcurrentDictionary<long, List<MemoryEntry>>();
+    private long _memoryEntriesNextId = 0;
+    // In-memory cache for MemoryNewFix entries
+    private readonly ConcurrentDictionary<long, List<MemoryNewFixEntry>> _memoryNewFixCache = new ConcurrentDictionary<long, List<MemoryNewFixEntry>>();
+    private long _memoryNewFixNextId = 0;
 
     public DatabaseService(string dbPath = "data/storage.db", IOllamaMonitorService? ollamaMonitor = null, IServiceProvider? serviceProvider = null)
     {
@@ -661,8 +684,11 @@ public sealed class DatabaseService
             isActive: true,
             profileResources);
 
-        ctx.StoryResourceStates.Add(new StoryResourceState
+        // Store initial state in in-memory cache instead of DB
+        var initId = (int)System.Threading.Interlocked.Increment(ref _storyResourceStatesNextId);
+        var initState = new StoryResourceState
         {
+            Id = initId,
             StoryId = story.Id,
             SeriesId = serieId,
             EpisodeNumber = serieEpisode,
@@ -672,8 +698,10 @@ public sealed class DatabaseService
             SourceEngine = "state_driven",
             CanonStateJson = SerializeCanonState(initialCanon),
             CreatedAt = DateTime.UtcNow.ToString("o")
-        });
-        ctx.SaveChanges();
+        };
+        _storyResourceStatesCache.AddOrUpdate(story.Id,
+            new List<StoryResourceState> { initState },
+            (k, old) => { old.Add(initState); return old; });
 
         tx.Commit();
         return story.Id;
@@ -692,11 +720,12 @@ public sealed class DatabaseService
         var profile = ctx.NarrativeProfiles.AsNoTracking().FirstOrDefault(p => p.Id == narrativeProfileId);
         if (profile == null) return null;
 
-        var latestState = ctx.StoryResourceStates.AsNoTracking()
-            .Where(s => s.StoryId == storyId)
-            .OrderByDescending(s => s.ChunkIndex)
-            .ThenByDescending(s => s.Id)
-            .FirstOrDefault();
+        // Read latest resource state from in-memory cache (no DB persistence)
+        StoryResourceState? latestState = null;
+        if (_storyResourceStatesCache.TryGetValue(storyId, out var _slist))
+        {
+            latestState = _slist.OrderByDescending(s => s.ChunkIndex).ThenByDescending(s => s.Id).FirstOrDefault();
+        }
 
         var canon = TryDeserializeCanonState(latestState?.CanonStateJson)
             ?? BuildDefaultCanonState(
@@ -813,11 +842,12 @@ public sealed class DatabaseService
             return false;
         }
 
-        var latestState = ctx.StoryResourceStates
-            .Where(s => s.StoryId == storyId)
-            .OrderByDescending(s => s.ChunkIndex)
-            .ThenByDescending(s => s.Id)
-            .FirstOrDefault();
+        // Read latest resource state from in-memory cache (no DB persistence)
+        StoryResourceState? latestState = null;
+        if (_storyResourceStatesCache.TryGetValue(storyId, out var _slist))
+        {
+            latestState = _slist.OrderByDescending(s => s.ChunkIndex).ThenByDescending(s => s.Id).FirstOrDefault();
+        }
 
         if (latestState == null)
         {
@@ -895,8 +925,11 @@ public sealed class DatabaseService
             }
         }
 
-        ctx.StoryResourceStates.Add(new StoryResourceState
+        // Persist into in-memory cache instead of DB
+        var newId = (int)System.Threading.Interlocked.Increment(ref _storyResourceStatesNextId);
+        var srs = new StoryResourceState
         {
+            Id = newId,
             StoryId = story.Id,
             SeriesId = story.SerieId,
             EpisodeNumber = story.SerieEpisode,
@@ -906,8 +939,10 @@ public sealed class DatabaseService
             SourceEngine = "state_driven",
             CanonStateJson = SerializeCanonState(nextCanon),
             CreatedAt = DateTime.UtcNow.ToString("o")
-        });
-        ctx.SaveChanges();
+        };
+        _storyResourceStatesCache.AddOrUpdate(story.Id,
+            new List<StoryResourceState> { srs },
+            (k, old) => { old.Add(srs); return old; });
 
         // Phase 1 narrative pipeline persistence: store a generic continuity snapshot and the generated block.
         try
@@ -985,8 +1020,28 @@ public sealed class DatabaseService
                 CoherenceScore = narrativeCoherenceScore,
                 CreatedAt = nowIso
             };
-            ctx.Set<NarrativeStoryBlock>().Add(narrativeBlock);
-            ctx.SaveChanges();
+            // Persist narrative block in in-memory cache instead of DB
+            var nbId = System.Threading.Interlocked.Increment(ref _narrativeBlocksNextId);
+            var nbDto = new NarrativeStoryBlockDto(
+                nbId,
+                story.Id,
+                story.SerieId,
+                seriesEpisodeId,
+                chapter.Id,
+                chapter.ChapterNumber,
+                chapter.ChapterNumber,
+                chunkText ?? string.Empty,
+                continuity.Id,
+                narrativeQualityScore,
+                narrativeCoherenceScore,
+                nowIso);
+            _narrativeBlocksCache.AddOrUpdate(story.Id,
+                new List<NarrativeStoryBlockDto> { nbDto },
+                (k, old) =>
+                {
+                    old.Add(nbDto);
+                    return old;
+                });
         }
         catch
         {
@@ -1055,51 +1110,36 @@ LIMIT @lim;";
 
     public List<NarrativeStoryBlockDto> ListNarrativeStoryBlocks(long? storyId = null, int limit = 500)
     {
-        try
+        // In-memory implementation: return cached blocks for the requested story
+        if (!storyId.HasValue) return new List<NarrativeStoryBlockDto>();
+        if (_narrativeBlocksCache.TryGetValue(storyId.Value, out var list))
         {
-            using var conn = CreateConnection();
-            conn.Open();
-            var sql = @"
-SELECT id AS Id, story_id AS StoryId, series_id AS SeriesId, episode_id AS EpisodeId,
-       chapter_id AS ChapterId, scene_id AS SceneId, block_index AS BlockIndex,
-       text_content AS TextContent, continuity_state_id AS ContinuityStateId,
-       quality_score AS QualityScore, coherence_score AS CoherenceScore, created_at AS CreatedAt
-FROM narrative_story_blocks
-WHERE (@storyId IS NULL OR story_id = @storyId)
-ORDER BY id DESC
-LIMIT @lim;";
-            return conn.Query<NarrativeStoryBlockDto>(sql, new
-            {
-                storyId,
-                lim = Math.Max(1, Math.Min(10000, limit))
-            }).ToList();
+            return list.OrderBy(b => b.BlockIndex).Take(Math.Max(1, Math.Min(10000, limit))).ToList();
         }
-        catch
-        {
-            return new List<NarrativeStoryBlockDto>();
-        }
+        return new List<NarrativeStoryBlockDto>();
     }
 
     public List<NarrativeAgentCallLogDto> ListNarrativeAgentCallLogs(long? storyId = null, int limit = 500)
     {
+        // In-memory implementation: return cached call logs
         try
         {
-            using var conn = CreateConnection();
-            conn.Open();
-            var sql = @"
-SELECT id AS Id, story_id AS StoryId, agent_name AS AgentName, input_tokens AS InputTokens,
-       output_tokens AS OutputTokens, deterministic_checks_result AS DeterministicChecksResult,
-       response_checker_result AS ResponseCheckerResult, retry_count AS RetryCount,
-       latency_ms AS LatencyMs, created_at AS CreatedAt
-FROM narrative_agent_calls_log
-WHERE (@storyId IS NULL OR story_id = @storyId)
-ORDER BY id DESC
-LIMIT @lim;";
-            return conn.Query<NarrativeAgentCallLogDto>(sql, new
+            var lim = Math.Max(1, Math.Min(10000, limit));
+            if (!storyId.HasValue)
             {
-                storyId,
-                lim = Math.Max(1, Math.Min(10000, limit))
-            }).ToList();
+                return _narrativeAgentCallsCache.Values
+                    .SelectMany(x => x)
+                    .OrderByDescending(x => x.Id)
+                    .Take(lim)
+                    .ToList();
+            }
+
+            if (_narrativeAgentCallsCache.TryGetValue(storyId.Value, out var list))
+            {
+                return list.OrderByDescending(x => x.Id).Take(lim).ToList();
+            }
+
+            return new List<NarrativeAgentCallLogDto>();
         }
         catch
         {
@@ -1109,8 +1149,19 @@ LIMIT @lim;";
 
     public List<NarrativePlanningStateDto> ListNarrativePlanningStates(int? seriesId = null, int limit = 200)
     {
+        // Prefer in-memory cache; if empty try DB and populate cache
         try
         {
+            var lim = Math.Max(1, Math.Min(5000, limit));
+            if (seriesId.HasValue)
+            {
+                if (_narrativePlanningStatesCache.TryGetValue(seriesId.Value, out var list) && list.Count > 0)
+                {
+                    return list.OrderByDescending(x => x.Id).Take(lim).ToList();
+                }
+            }
+
+            // Fallback to DB read (populate cache if possible)
             using var conn = CreateConnection();
             conn.Open();
             var sql = @"
@@ -1120,14 +1171,37 @@ FROM narrative_planning_state
 WHERE (@seriesId IS NULL OR series_id = @seriesId)
 ORDER BY id DESC
 LIMIT @lim;";
-            return conn.Query<NarrativePlanningStateDto>(sql, new
+            var rows = conn.Query<NarrativePlanningStateDto>(sql, new
             {
                 seriesId,
-                lim = Math.Max(1, Math.Min(5000, limit))
+                lim = lim
             }).ToList();
+
+            // Populate cache from DB rows
+            foreach (var r in rows)
+            {
+                try
+                {
+                    _narrativePlanningStatesCache.AddOrUpdate((int)r.SeriesId,
+                        new List<NarrativePlanningStateDto> { r },
+                        (k, old) => { old.Add(r); return old; });
+                }
+                catch { }
+            }
+
+            return rows;
         }
         catch
         {
+            // If DB fails, return whatever is in cache across all series (or empty list)
+            if (!seriesId.HasValue)
+            {
+                return _narrativePlanningStatesCache.Values.SelectMany(x => x).OrderByDescending(x => x.Id).Take(limit).ToList();
+            }
+            if (_narrativePlanningStatesCache.TryGetValue(seriesId.Value, out var cached))
+            {
+                return cached.OrderByDescending(x => x.Id).Take(limit).ToList();
+            }
             return new List<NarrativePlanningStateDto>();
         }
     }
@@ -1146,29 +1220,27 @@ LIMIT @lim;";
         {
             return 0;
         }
-
+        // In-memory implementation: append to cache and return synthetic id
         try
         {
-            using var conn = CreateConnection();
-            conn.Open();
-            const string sql = @"
-INSERT INTO narrative_agent_calls_log
-    (story_id, agent_name, input_tokens, output_tokens, deterministic_checks_result, response_checker_result, retry_count, latency_ms, created_at)
-VALUES
-    (@StoryId, @AgentName, @InputTokens, @OutputTokens, @DeterministicChecksResult, @ResponseCheckerResult, @RetryCount, @LatencyMs, @CreatedAt);
-SELECT last_insert_rowid();";
-            return conn.ExecuteScalar<long>(sql, new
-            {
-                StoryId = ToIntId(storyId),
-                AgentName = agentName.Trim(),
-                InputTokens = inputTokens,
-                OutputTokens = outputTokens,
-                DeterministicChecksResult = deterministicChecksResult,
-                ResponseCheckerResult = responseCheckerResult,
-                RetryCount = Math.Max(0, retryCount),
-                LatencyMs = latencyMs,
-                CreatedAt = DateTime.UtcNow.ToString("o")
-            });
+            var id = System.Threading.Interlocked.Increment(ref _narrativeAgentCallsNextId);
+            var dto = new NarrativeAgentCallLogDto(
+                id,
+                storyId,
+                agentName.Trim(),
+                inputTokens,
+                outputTokens,
+                deterministicChecksResult,
+                responseCheckerResult,
+                Math.Max(0, retryCount),
+                latencyMs,
+                DateTime.UtcNow.ToString("o"));
+
+            _narrativeAgentCallsCache.AddOrUpdate(storyId,
+                new List<NarrativeAgentCallLogDto> { dto },
+                (k, old) => { old.Add(dto); return old; });
+
+            return id;
         }
         catch
         {
@@ -1182,7 +1254,7 @@ SELECT last_insert_rowid();";
         {
             return 0;
         }
-
+        // Try to persist to DB first; if persistence fails, keep entry in-memory
         try
         {
             using var conn = CreateConnection();
@@ -1191,17 +1263,38 @@ SELECT last_insert_rowid();";
 INSERT INTO narrative_planning_state (series_id, episode_id, planning_json, created_at)
 VALUES (@SeriesId, @EpisodeId, @PlanningJson, @CreatedAt);
 SELECT last_insert_rowid();";
-            return conn.ExecuteScalar<long>(sql, new
+            var newId = conn.ExecuteScalar<long>(sql, new
             {
                 SeriesId = seriesId,
                 EpisodeId = episodeId,
                 PlanningJson = planningJson,
                 CreatedAt = DateTime.UtcNow.ToString("o")
             });
+
+            // Also populate cache
+            var dto = new NarrativePlanningStateDto(newId, seriesId, episodeId ?? 0, planningJson, DateTime.UtcNow.ToString("o"));
+            _narrativePlanningStatesCache.AddOrUpdate(seriesId,
+                new List<NarrativePlanningStateDto> { dto },
+                (k, old) => { old.Add(dto); return old; });
+
+            return newId;
         }
         catch
         {
-            return 0;
+            // Fallback: add to in-memory cache with synthetic id
+            try
+            {
+                var id = System.Threading.Interlocked.Increment(ref _narrativePlanningStatesNextId);
+                var dto = new NarrativePlanningStateDto(id, seriesId, episodeId ?? 0, planningJson, DateTime.UtcNow.ToString("o"));
+                _narrativePlanningStatesCache.AddOrUpdate(seriesId,
+                    new List<NarrativePlanningStateDto> { dto },
+                    (k, old) => { old.Add(dto); return old; });
+                return id;
+            }
+            catch
+            {
+                return 0;
+            }
         }
     }
 
@@ -1224,41 +1317,37 @@ SELECT last_insert_rowid();";
         {
             return 0;
         }
-
-        try
+        // In-memory implementation: replace cached blocks for the story deterministically
+        var now = DateTime.UtcNow.ToString("o");
+        var created = new List<NarrativeStoryBlockDto>();
+        foreach (var b in list)
         {
-            using var conn = CreateConnection();
-            conn.Open();
-            using var tx = conn.BeginTransaction();
-            var now = DateTime.UtcNow.ToString("o");
+            var id = System.Threading.Interlocked.Increment(ref _narrativeBlocksNextId);
+            created.Add(new NarrativeStoryBlockDto(
+                id,
+                storyId,
+                seriesId,
+                episodeId,
+                null,
+                null,
+                b.BlockIndex,
+                b.TextContent,
+                null,
+                null,
+                null,
+                now));
+        }
 
-            // Replace existing blocks for the story to keep the table deterministic on reruns.
-            conn.Execute("DELETE FROM narrative_story_blocks WHERE story_id = @storyId", new { storyId }, tx);
-
-            const string sql = @"
-INSERT INTO narrative_story_blocks
-    (story_id, series_id, episode_id, chapter_id, scene_id, block_index, text_content, continuity_state_id, quality_score, coherence_score, created_at)
-VALUES
-    (@StoryId, @SeriesId, @EpisodeId, NULL, NULL, @BlockIndex, @TextContent, NULL, NULL, NULL, @CreatedAt);";
-
-            var rows = list.Select(b => new
+        _narrativeBlocksCache.AddOrUpdate(storyId,
+            created,
+            (k, old) =>
             {
-                StoryId = ToIntId(storyId),
-                SeriesId = seriesId,
-                EpisodeId = episodeId,
-                BlockIndex = b.BlockIndex,
-                TextContent = b.TextContent,
-                CreatedAt = now
-            }).ToList();
+                old.Clear();
+                old.AddRange(created);
+                return old;
+            });
 
-            var inserted = conn.Execute(sql, rows, tx);
-            tx.Commit();
-            return inserted;
-        }
-        catch
-        {
-            return 0;
-        }
+        return created.Count;
     }
 
     public List<Chapter> ListChaptersForStory(long storyId)
@@ -1315,11 +1404,12 @@ VALUES
         story.CharCount = (story.StoryRaw ?? string.Empty).Length;
         story.NarrativeEngineStatus = "completed";
 
-        var latestState = ctx.StoryResourceStates
-            .Where(s => s.StoryId == storyId)
-            .OrderByDescending(s => s.ChunkIndex)
-            .ThenByDescending(s => s.Id)
-            .FirstOrDefault();
+        // Mark latest runtime state as final in in-memory cache
+        StoryResourceState? latestState = null;
+        if (_storyResourceStatesCache.TryGetValue(storyId, out var _slist2))
+        {
+            latestState = _slist2.OrderByDescending(s => s.ChunkIndex).ThenByDescending(s => s.Id).FirstOrDefault();
+        }
         if (latestState != null)
         {
             latestState.IsFinal = true;
@@ -1328,6 +1418,50 @@ VALUES
             {
                 canon.IsActive = false;
                 latestState.CanonStateJson = SerializeCanonState(canon);
+            }
+            // Persist final snapshot to DB so it survives process restart
+            try
+            {
+                using var conn = CreateConnection();
+                conn.Open();
+
+                var createSql = @"CREATE TABLE IF NOT EXISTS story_resource_states (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ story_id INTEGER NOT NULL,
+ series_id INTEGER,
+ episode_number INTEGER,
+ chunk_index INTEGER NOT NULL,
+ is_initial INTEGER NOT NULL DEFAULT 0,
+ is_final INTEGER NOT NULL DEFAULT 0,
+ source_engine TEXT,
+ canon_state_json TEXT,
+ created_at TEXT
+);";
+                conn.Execute(createSql);
+
+                var insertSql = @"INSERT INTO story_resource_states (story_id, series_id, episode_number, chunk_index, is_initial, is_final, source_engine, canon_state_json, created_at)
+ VALUES (@storyId, @seriesId, @episodeNumber, @chunkIndex, @isInitial, @isFinal, @sourceEngine, @canonStateJson, @createdAt);
+ SELECT last_insert_rowid();";
+
+                var newId = conn.ExecuteScalar<long>(insertSql, new
+                {
+                    storyId = latestState.StoryId,
+                    seriesId = latestState.SeriesId,
+                    episodeNumber = latestState.EpisodeNumber,
+                    chunkIndex = latestState.ChunkIndex,
+                    isInitial = latestState.IsInitial ? 1 : 0,
+                    isFinal = latestState.IsFinal ? 1 : 0,
+                    sourceEngine = latestState.SourceEngine,
+                    canonStateJson = latestState.CanonStateJson,
+                    createdAt = DateTime.UtcNow.ToString("o")
+                });
+
+                // Update in-memory id to reflect DB-assigned id
+                latestState.Id = (int)newId;
+            }
+            catch
+            {
+                // If persistence fails, keep working with in-memory state; do not break story completion
             }
         }
         ctx.SaveChanges();
@@ -1341,11 +1475,12 @@ VALUES
         using var wrapper = CreateDbContextWrapper();
         var ctx = wrapper.Context;
 
-        var row = ctx.StoryResourceStates.AsNoTracking()
-            .Where(s => s.StoryId == storyId)
-            .OrderByDescending(s => s.ChunkIndex)
-            .ThenByDescending(s => s.Id)
-            .FirstOrDefault();
+        // Read snapshot from in-memory cache
+        StoryResourceState? row = null;
+        if (_storyResourceStatesCache.TryGetValue(storyId, out var list))
+        {
+            row = list.OrderByDescending(s => s.ChunkIndex).ThenByDescending(s => s.Id).FirstOrDefault();
+        }
         if (row == null) return null;
 
         return new StoryResourceStateSnapshotDto(
@@ -1377,28 +1512,36 @@ VALUES
         var ctx = wrapper.Context;
         using var tx = ctx.Database.BeginTransaction();
 
-        var existingInitial = ctx.StoryResourceStates
-            .Where(s => s.StoryId == storyId && s.IsInitial)
-            .ToList();
-        if (existingInitial.Count > 0)
-        {
-            ctx.StoryResourceStates.RemoveRange(existingInitial);
-            ctx.SaveChanges();
-        }
-
-        ctx.StoryResourceStates.Add(new StoryResourceState
-        {
-            StoryId = ToIntId(storyId),
-            SeriesId = seriesId,
-            EpisodeNumber = episodeNumber,
-            ChunkIndex = 0,
-            IsInitial = true,
-            IsFinal = false,
-            SourceEngine = string.IsNullOrWhiteSpace(sourceEngine) ? "state_driven" : sourceEngine.Trim(),
-            CanonStateJson = canonicalStateJson,
-            CreatedAt = DateTime.UtcNow.ToString("o")
-        });
-        ctx.SaveChanges();
+        // Replace initial state in in-memory cache
+        _storyResourceStatesCache.AddOrUpdate(storyId,
+            new List<StoryResourceState> { new StoryResourceState
+                {
+                    Id = (int)System.Threading.Interlocked.Increment(ref _storyResourceStatesNextId),
+                    StoryId = ToIntId(storyId),
+                    SeriesId = seriesId,
+                    EpisodeNumber = episodeNumber,
+                    ChunkIndex = 0,
+                    IsInitial = true,
+                    IsFinal = false,
+                    SourceEngine = string.IsNullOrWhiteSpace(sourceEngine) ? "state_driven" : sourceEngine.Trim(),
+                    CanonStateJson = canonicalStateJson,
+                    CreatedAt = DateTime.UtcNow.ToString("o")
+                } },
+            (k, old) => { old.RemoveAll(s => s.IsInitial); old.Add(new StoryResourceState
+                {
+                    Id = (int)System.Threading.Interlocked.Increment(ref _storyResourceStatesNextId),
+                    StoryId = ToIntId(storyId),
+                    SeriesId = seriesId,
+                    EpisodeNumber = episodeNumber,
+                    ChunkIndex = 0,
+                    IsInitial = true,
+                    IsFinal = false,
+                    SourceEngine = string.IsNullOrWhiteSpace(sourceEngine) ? "state_driven" : sourceEngine.Trim(),
+                    CanonStateJson = canonicalStateJson,
+                    CreatedAt = DateTime.UtcNow.ToString("o")
+                }); return old; });
+        tx.Commit();
+        return true;
         tx.Commit();
         return true;
     }
@@ -1522,6 +1665,81 @@ VALUES
         catch
         {
             return null;
+        }
+    }
+
+    // Memory entries APIs (in-memory first)
+    public void AddMemoryEntry(MemoryEntry entry)
+    {
+        if (entry == null) return;
+        if (string.IsNullOrWhiteSpace(entry.Id))
+        {
+            entry.Id = System.Threading.Interlocked.Increment(ref _memoryEntriesNextId).ToString();
+        }
+
+        var cacheKey = long.TryParse(entry.Id, out var parsedId)
+            ? parsedId
+            : System.Threading.Interlocked.Increment(ref _memoryEntriesNextId);
+
+        _memoryEntriesCache.AddOrUpdate(cacheKey,
+            _ => new List<MemoryEntry> { entry },
+            (k, old) => { old.Add(entry); return old; });
+    }
+
+    public List<MemoryEntry> ListMemoryEntries(long? storyId = null)
+    {
+        try
+        {
+            if (storyId.HasValue)
+            {
+                if (_memoryEntriesCache.TryGetValue(storyId.Value, out var list))
+                {
+                    return list.ToList();
+                }
+                return new List<MemoryEntry>();
+            }
+            return _memoryEntriesCache.Values.SelectMany(x => x).ToList();
+        }
+        catch
+        {
+            return new List<MemoryEntry>();
+        }
+    }
+
+    public void AddMemoryNewFix(MemoryNewFixEntry entry)
+    {
+        if (entry == null) return;
+        if (string.IsNullOrWhiteSpace(entry.Id))
+        {
+            entry.Id = System.Threading.Interlocked.Increment(ref _memoryNewFixNextId).ToString();
+        }
+
+        var cacheKey = long.TryParse(entry.Id, out var parsedId)
+            ? parsedId
+            : System.Threading.Interlocked.Increment(ref _memoryNewFixNextId);
+
+        _memoryNewFixCache.AddOrUpdate(cacheKey,
+            _ => new List<MemoryNewFixEntry> { entry },
+            (k, old) => { old.Add(entry); return old; });
+    }
+
+    public List<MemoryNewFixEntry> ListMemoryNewFixes(long? storyId = null)
+    {
+        try
+        {
+            if (storyId.HasValue)
+            {
+                if (_memoryNewFixCache.TryGetValue(storyId.Value, out var list))
+                {
+                    return list.ToList();
+                }
+                return new List<MemoryNewFixEntry>();
+            }
+            return _memoryNewFixCache.Values.SelectMany(x => x).ToList();
+        }
+        catch
+        {
+            return new List<MemoryNewFixEntry>();
         }
     }
 
@@ -9284,7 +9502,7 @@ WHERE (agent_id IS NULL OR agent_id <= 0)
                     Console.WriteLine($"[DB] Warning: model_roles rows with unresolved agent_id after backfill: {unresolvedAgentRefs}");
                 }
 
-                var agentNotNull = conn.ExecuteScalar<long>("SELECT COALESCE(notnull, 0) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('agent_id') LIMIT 1") > 0;
+                var agentNotNull = conn.ExecuteScalar<long>("SELECT COALESCE(\"notnull\", 0) FROM pragma_table_info('model_roles') WHERE lower(name)=lower('agent_id') LIMIT 1") > 0;
                 if (!agentNotNull && unresolvedAgentRefs == 0)
                 {
                     Console.WriteLine("[DB] Migration: rebuilding model_roles to enforce agent_id NOT NULL");
@@ -10451,18 +10669,33 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         return true;
     }
 
-    public void UpdateLatestModelResponseResult(int threadId, string result, string? failReason, bool examined)
+    public void UpdateLatestModelResponseResult(int threadId, string result, string? failReason, bool examined, long? storyId = null)
     {
         if (threadId <= 0) return;
         if (string.IsNullOrWhiteSpace(result)) return;
+        var story = storyId.HasValue && storyId.Value > 0 && storyId.Value <= int.MaxValue
+            ? (int?)storyId.Value
+            : null;
 
         using var context = CreateDbContext();
-        var log = context.Logs
+        IQueryable<LogEntry> baseQuery = context.Logs
             .Where(l =>
                 l.ThreadId == threadId &&
-                (l.Category == "ModelCompletion" || l.Category == "ModelResponse"))
-            .OrderByDescending(l => l.Id)
-            .FirstOrDefault();
+                (l.Category == "ModelCompletion" || l.Category == "ModelResponse"));
+
+        var log = story.HasValue
+            ? baseQuery
+                .Where(l => l.StoryId.HasValue && l.StoryId.Value == story.Value)
+                .OrderByDescending(l => l.Id)
+                .FirstOrDefault()
+            : null;
+
+        if (log == null)
+        {
+            log = baseQuery
+                .OrderByDescending(l => l.Id)
+                .FirstOrDefault();
+        }
 
         if (log == null) return;
 
@@ -10480,15 +10713,18 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         context.SaveChanges();
     }
 
-    public long? TryGetLatestModelResponseLogId(int threadId, string? agentName = null, string? modelName = null)
+    public long? TryGetLatestModelResponseLogId(int threadId, string? agentName = null, string? modelName = null, long? storyId = null)
     {
         if (threadId <= 0) return null;
 
         var agent = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim();
         var model = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+        var story = storyId.HasValue && storyId.Value > 0 && storyId.Value <= int.MaxValue
+            ? (int?)storyId.Value
+            : null;
 
         using var context = CreateDbContext();
-        var q = context.Logs.Where(l =>
+        IQueryable<LogEntry> q = context.Logs.Where(l =>
             l.ThreadId == threadId &&
             (l.Category == "ModelCompletion" || l.Category == "ModelResponse") &&
             l.Id.HasValue);
@@ -10503,20 +10739,33 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             q = q.Where(l => l.ModelName != null && l.ModelName != "" && l.ModelName.Trim() == model);
         }
 
+        if (story.HasValue)
+        {
+            var scoped = q.Where(l => l.StoryId.HasValue && l.StoryId.Value == story.Value);
+            var scopedLatest = scoped.OrderByDescending(l => l.Id).Select(l => l.Id).FirstOrDefault();
+            if (scopedLatest.HasValue)
+            {
+                return scopedLatest;
+            }
+        }
+
         var latest = q.OrderByDescending(l => l.Id).Select(l => l.Id).FirstOrDefault();
         return latest;
     }
 
-    public long? TryGetLatestModelResponseLogIdByScope(string threadScope, string? agentName = null, string? modelName = null)
+    public long? TryGetLatestModelResponseLogIdByScope(string threadScope, string? agentName = null, string? modelName = null, long? storyId = null)
     {
         if (string.IsNullOrWhiteSpace(threadScope)) return null;
 
         var scope = threadScope.Trim();
         var agent = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim();
         var model = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+        var story = storyId.HasValue && storyId.Value > 0 && storyId.Value <= int.MaxValue
+            ? (int?)storyId.Value
+            : null;
 
         using var context = CreateDbContext();
-        var q = context.Logs.Where(l =>
+        IQueryable<LogEntry> q = context.Logs.Where(l =>
             l.ThreadScope != null &&
             l.ThreadScope != "" &&
             l.ThreadScope.Trim() == scope &&
@@ -10531,6 +10780,16 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         if (!string.IsNullOrWhiteSpace(model))
         {
             q = q.Where(l => l.ModelName != null && l.ModelName != "" && l.ModelName.Trim() == model);
+        }
+
+        if (story.HasValue)
+        {
+            var scoped = q.Where(l => l.StoryId.HasValue && l.StoryId.Value == story.Value);
+            var scopedLatest = scoped.OrderByDescending(l => l.Id).Select(l => l.Id).FirstOrDefault();
+            if (scopedLatest.HasValue)
+            {
+                return scopedLatest;
+            }
         }
 
         var latest = q.OrderByDescending(l => l.Id).Select(l => l.Id).FirstOrDefault();
@@ -10560,22 +10819,53 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         context.SaveChanges();
     }
 
-    public void UpdateLatestModelResponseResultForAgent(int threadId, string agentName, string result, string? failReason, bool examined)
+    public long? InsertLogEntryImmediate(TinyGenerator.Models.LogEntry entry)
+    {
+        if (entry == null) return null;
+
+        using var context = CreateDbContext();
+        context.Logs.Add(entry);
+        context.SaveChanges();
+
+        if (entry.Id.HasValue && entry.Id.Value > 0)
+        {
+            return entry.Id.Value;
+        }
+
+        return null;
+    }
+
+    public void UpdateLatestModelResponseResultForAgent(int threadId, string agentName, string result, string? failReason, bool examined, long? storyId = null)
     {
         if (threadId <= 0) return;
         if (string.IsNullOrWhiteSpace(agentName)) return;
         if (string.IsNullOrWhiteSpace(result)) return;
 
         var agent = agentName.Trim();
+        var story = storyId.HasValue && storyId.Value > 0 && storyId.Value <= int.MaxValue
+            ? (int?)storyId.Value
+            : null;
 
         using var context = CreateDbContext();
-        var log = context.Logs
+        IQueryable<LogEntry> baseQuery = context.Logs
             .Where(l =>
                 l.ThreadId == threadId &&
                 (l.Category == "ModelCompletion" || l.Category == "ModelResponse") &&
-                l.AgentName != null && l.AgentName != "" && l.AgentName.Trim() == agent)
-            .OrderByDescending(l => l.Id)
-            .FirstOrDefault();
+                l.AgentName != null && l.AgentName != "" && l.AgentName.Trim() == agent);
+
+        var log = story.HasValue
+            ? baseQuery
+                .Where(l => l.StoryId.HasValue && l.StoryId.Value == story.Value)
+                .OrderByDescending(l => l.Id)
+                .FirstOrDefault()
+            : null;
+
+        if (log == null)
+        {
+            log = baseQuery
+                .OrderByDescending(l => l.Id)
+                .FirstOrDefault();
+        }
 
         if (log == null) return;
 
@@ -11823,9 +12113,23 @@ WHERE Id = @modelId;";
     /// </summary>
     public void SaveChunkFacts(ChunkFacts facts)
     {
-        using var context = CreateDbContext();
-        context.ChunkFacts.Add(facts);
-        context.SaveChanges();
+        if (facts == null) return;
+
+        // assign synthetic id if none
+        if (facts.Id == 0)
+        {
+            facts.Id = (int)System.Threading.Interlocked.Increment(ref _chunkFactsNextId);
+        }
+
+        _chunkFactsCache.AddOrUpdate(facts.StoryId,
+            new List<ChunkFacts> { facts },
+            (k, old) =>
+            {
+                // replace any existing for same chunk number
+                old.RemoveAll(c => c.ChunkNumber == facts.ChunkNumber);
+                old.Add(facts);
+                return old;
+            });
     }
 
     /// <summary>
@@ -11833,8 +12137,23 @@ WHERE Id = @modelId;";
     /// </summary>
     public ChunkFacts? GetChunkFacts(int storyId, int chunkNumber)
     {
-        using var context = CreateDbContext();
-        return context.ChunkFacts.FirstOrDefault(c => c.StoryId == storyId && c.ChunkNumber == chunkNumber);
+        if (storyId <= 0) return null;
+
+        if (_chunkFactsCache.TryGetValue(storyId, out var list))
+        {
+            return list.FirstOrDefault(c => c.ChunkNumber == chunkNumber);
+        }
+
+        // fallback to DB if cache miss
+        try
+        {
+            using var context = CreateDbContext();
+            return context.ChunkFacts.FirstOrDefault(c => c.StoryId == storyId && c.ChunkNumber == chunkNumber);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -11842,8 +12161,28 @@ WHERE Id = @modelId;";
     /// </summary>
     public List<ChunkFacts> GetAllChunkFacts(int storyId)
     {
-        using var context = CreateDbContext();
-        return context.ChunkFacts.Where(c => c.StoryId == storyId).OrderBy(c => c.ChunkNumber).ToList();
+        if (storyId <= 0) return new List<ChunkFacts>();
+
+        if (_chunkFactsCache.TryGetValue(storyId, out var list) && list.Count > 0)
+        {
+            return list.OrderBy(c => c.ChunkNumber).ToList();
+        }
+
+        // fallback to DB
+        try
+        {
+            using var context = CreateDbContext();
+            var rows = context.ChunkFacts.Where(c => c.StoryId == storyId).OrderBy(c => c.ChunkNumber).ToList();
+            if (rows.Count > 0)
+            {
+                _chunkFactsCache.AddOrUpdate(storyId, rows, (k, old) => { old.AddRange(rows); return old; });
+            }
+            return rows;
+        }
+        catch
+        {
+            return new List<ChunkFacts>();
+        }
     }
 
     /// <summary>

@@ -226,7 +226,7 @@ public class ChunkProcessingServiceTests
         var req = BuildRequest(minAmbientTagsRequired: 2, maxAttempts: 1);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.ProcessAsync(req, CancellationToken.None));
-        Assert.Contains("Failed to process chunk", ex.Message);
+        Assert.Contains("Failed to execute", ex.Message);
     }
 
     private static ChunkProcessRequest BuildRequest(int minAmbientTagsRequired, int maxAttempts = 2)
@@ -302,7 +302,16 @@ internal sealed class TestDbFixture : IDisposable
             var candidate = Path.Combine(current.FullName, "data", "storage.db");
             if (File.Exists(candidate))
             {
-                return candidate;
+                try
+                {
+                    var fi = new FileInfo(candidate);
+                    // Skip obviously empty or truncated files (defensive for test environments)
+                    if (fi.Length > 1024) return candidate;
+                }
+                catch
+                {
+                    return candidate;
+                }
             }
 
             current = current.Parent;

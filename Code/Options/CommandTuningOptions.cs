@@ -31,7 +31,7 @@ public sealed class CommandTuningOptions
         public int DefaultTargetTokensPerChunk { get; set; } = 900;
         public int DefaultMaxTokensPerChunk { get; set; } = 1400;
         public int MaxAttemptsPerChunk { get; set; } = 3;
-        public int MinFxTagsPerChunk { get; set; } = 1;
+        public int MinFxTagsPerChunk { get; set; } = 0;
         public bool EnableFallback { get; set; } = true;
         public bool DiagnoseOnFinalFailure { get; set; } = true;
         public int RetryDelayBaseSeconds { get; set; } = 2;
@@ -46,7 +46,7 @@ public sealed class CommandTuningOptions
         public int OverlapTokens { get; set; } = 150;
         public int MaxAttemptsPerChunk { get; set; } = 3;
         public int MaxMusicTagsPerChunkRequirement { get; set; } = 3;
-        public int MinMusicTagsPerChunkRequirement { get; set; } = 1;
+        public int MinMusicTagsPerChunkRequirement { get; set; } = 0;
         public bool EnableFallback { get; set; } = true;
         public bool DiagnoseOnFinalFailure { get; set; } = true;
         public int RetryDelayBaseSeconds { get; set; } = 2;

@@ -865,7 +865,7 @@ public partial class StoryStatus : IActiveFlag, ITimeStamped, IDescription, ISof
 
 }
 
-public partial class SystemReport : IActiveFlag, ITimeStamped, IDescription, ISoftDelete, IOrderable
+public partial class SystemReport : IActiveFlag, ITimeStamped, IDescription, IOrderable
 {
     [Column("description")]
     public string? Description { get; set; }

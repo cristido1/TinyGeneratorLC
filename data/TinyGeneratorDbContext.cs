@@ -58,9 +58,10 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<FailureRule> FailureRules => Set<FailureRule>();
     public DbSet<ConsequenceRule> ConsequenceRules => Set<ConsequenceRule>();
     public DbSet<ConsequenceImpact> ConsequenceImpacts => Set<ConsequenceImpact>();
-    public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
+    // StoryResourceStates persistence removed: handled in-memory by DatabaseService
+    // public DbSet<StoryResourceState> StoryResourceStates => Set<StoryResourceState>();
     public DbSet<NarrativeContinuityState> NarrativeContinuityStates => Set<NarrativeContinuityState>();
-    public DbSet<NarrativeStoryBlock> NarrativeStoryBlocks => Set<NarrativeStoryBlock>();
+    // NarrativeStoryBlocks persistence removed: handled in-memory by DatabaseService
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<ModelRole> ModelRoles => Set<ModelRole>();
     public DbSet<ModelRoleError> ModelRoleErrors => Set<ModelRoleError>();
@@ -69,12 +70,16 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<SentimentEmbedding> SentimentEmbeddings => Set<SentimentEmbedding>();
     public DbSet<Sound> Sounds => Set<Sound>();
     public DbSet<SoundMissing> SoundsMissing => Set<SoundMissing>();
-    public DbSet<MemoryEntry> MemoryEntries => Set<MemoryEntry>();
-    public DbSet<MemoryNewFixEntry> MemoryNewFixEntries => Set<MemoryNewFixEntry>();
+    // Short-term memory persisted in-memory by DatabaseService
+    // public DbSet<MemoryEntry> MemoryEntries => Set<MemoryEntry>();
+    // public DbSet<MemoryNewFixEntry> MemoryNewFixEntries => Set<MemoryNewFixEntry>();
     public DbSet<EvaluationLegacyEntry> EvaluationsLegacy => Set<EvaluationLegacyEntry>();
-    public DbSet<NarrativeAgentCallLogEntry> NarrativeAgentCallLogs => Set<NarrativeAgentCallLogEntry>();
-    public DbSet<NarrativePlanningStateEntry> NarrativePlanningStates => Set<NarrativePlanningStateEntry>();
-    public DbSet<StoryChunkFactEntry> StoryChunkFacts => Set<StoryChunkFactEntry>();
+    // NarrativeAgentCallLogs moved to in-memory cache handled by DatabaseService (runtime-only)
+    // public DbSet<NarrativeAgentCallLogEntry> NarrativeAgentCallLogs => Set<NarrativeAgentCallLogEntry>();
+    // NarrativePlanningStates moved to in-memory cache handled by DatabaseService (runtime/planning)
+    // public DbSet<NarrativePlanningStateEntry> NarrativePlanningStates => Set<NarrativePlanningStateEntry>();
+    // StoryChunkFacts are handled in-memory by DatabaseService (derivable)
+    // public DbSet<StoryChunkFactEntry> StoryChunkFacts => Set<StoryChunkFactEntry>();
     public DbSet<NumeratorStateEntry> NumeratorsState => Set<NumeratorStateEntry>();
     public DbSet<MetadataTableEntry> MetadataTables => Set<MetadataTableEntry>();
     public DbSet<MetadataFieldEntry> MetadataFields => Set<MetadataFieldEntry>();

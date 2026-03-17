@@ -1,0 +1,65 @@
+@page
+@model TinyGenerator.Pages.ExternalServicesMonitorModel
+@{
+    ViewData["Title"] = "External Services Monitor";
+    ViewData["PageDescription"] = "Stato sintetico dei servizi esterni";
+}
+
+<div class="d-flex align-items-center mb-3" style="gap:.75rem;">
+    <div>
+        <h4 class="mb-0">External Services Monitor</h4>
+        <div class="small text-muted">Monitor essenziale di Ollama, llama.cpp, vLLM e localTTS.</div>
+    </div>
+    <button id="refreshBtn" class="btn btn-sm btn-primary ms-auto">Aggiorna</button>
+</div>
+
+<div class="row g-3">
+@foreach (var service in Model.Services)
+{
+    <div class="col-12 col-lg-6">
+        <section class="card h-100 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex align-items-start justify-content-between mb-2" style="gap:1rem;">
+                    <div>
+                        <h5 class="card-title mb-1">@service.Title</h5>
+                        <div class="small text-muted">@service.Endpoint</div>
+                    </div>
+                    <span class="badge @(service.IsActive ? "bg-success" : "bg-secondary")">
+                        @(service.IsActive ? "attivo" : "non attivo")
+                    </span>
+                </div>
+
+                <div class="mb-2">@service.Summary</div>
+
+                @if (!string.IsNullOrWhiteSpace(service.Activity))
+                {
+                    <div class="small mb-2">
+                        <strong>Attivita:</strong> @service.Activity
+                    </div>
+                }
+
+                @if (service.Facts.Count > 0)
+                {
+                    <div class="small mb-2">
+                        @foreach (var fact in service.Facts)
+                        {
+                            <div><strong>@fact.Label:</strong> @fact.Value</div>
+                        }
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(service.Error))
+                {
+                    <div class="small text-danger">
+                        <strong>Nota:</strong> @service.Error
+                    </div>
+                }
+            </div>
+        </section>
+    </div>
+}
+</div>
+
+<script>
+    document.getElementById('refreshBtn')?.addEventListener('click', () => location.reload());
+</script>

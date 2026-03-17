@@ -9,6 +9,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using TinyGenerator.Configuration;
 
 namespace TinyGenerator.Services
 {
@@ -27,6 +29,8 @@ namespace TinyGenerator.Services
         // Can be a single path or a semicolon-separated list of paths.
         // On Windows, llama.cpp CUDA DLLs are typically in ...\CUDA\vXX.Y\bin\x64
         private readonly string? _cudaBinPath;
+        private readonly IConfiguration _configuration;
+        private readonly IOptionsMonitor<MonomodelModeOptions>? _monomodelOptions;
         private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         private readonly ICustomLogger? _logger;
 
@@ -37,23 +41,26 @@ namespace TinyGenerator.Services
         private bool _loggedCudaPreflight;
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _recentStderr = new();
 
-        public LlamaService(IConfiguration configuration, ICustomLogger? logger = null)
+        public LlamaService(
+            IConfiguration configuration,
+            IOptionsMonitor<MonomodelModeOptions>? monomodelOptions = null,
+            ICustomLogger? logger = null)
         {
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            _monomodelOptions = monomodelOptions;
             _logger = logger;
 
-            _llamaRoot = configuration["LlamaCpp:Root"] ?? @"C:\llama.cpp";
-            _llamaModels = configuration["LlamaCpp:Models"]
-                ?? configuration["LlamaCpp:ModelsDir"]
-                ?? Path.Combine(_llamaRoot, "models");
-            _llamaServerExe = configuration["LlamaCpp:ServerExe"] ?? Path.Combine(_llamaRoot, "llama-server.exe");
-            _llamaHost = configuration["LlamaCpp:Host"] ?? "127.0.0.1";
-            _llamaPort = int.TryParse(configuration["LlamaCpp:Port"], out var port) ? port : 11436;
-            _llamaGpuLayers = int.TryParse(configuration["LlamaCpp:GpuLayers"], out var ngl) ? ngl : 99;
-            _llamaDevice = configuration["LlamaCpp:Device"];
-            _cudaBinPath = configuration["LlamaCpp:CudaBinPath"];
-            _llamaRestartDelayMs = int.TryParse(configuration["LlamaCpp:RestartDelayMs"], out var delayMs) ? delayMs : 500;
-            _llamaVerboseLogs = bool.TryParse(configuration["LlamaCpp:VerboseLogs"], out var v) ? v : false;
-            _llamaRestartPolicy = configuration["LlamaCpp:RestartPolicy"] ?? "kill";
+            _llamaRoot = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:Root");
+            _llamaModels = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:Models");
+            _llamaServerExe = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:ServerExe");
+            _llamaHost = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:Host");
+            _llamaPort = int.TryParse(ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:Port"), out var port) ? port : throw new InvalidOperationException("Configurazione non valida: ExternalServers:LlamaCpp:Port");
+            _llamaGpuLayers = int.TryParse(ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:GpuLayers"), out var ngl) ? ngl : throw new InvalidOperationException("Configurazione non valida: ExternalServers:LlamaCpp:GpuLayers");
+            _llamaDevice = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:Device");
+            _cudaBinPath = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:CudaBinPath");
+            _llamaRestartDelayMs = int.TryParse(ExternalServerConfig.GetValue(configuration, "LlamaCpp:RestartDelayMs"), out var delayMs) ? delayMs : 500;
+            _llamaVerboseLogs = bool.TryParse(ExternalServerConfig.GetValue(configuration, "LlamaCpp:VerboseLogs"), out var v) && v;
+            _llamaRestartPolicy = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:RestartPolicy");
         }
 
         public void StartServer(string modelName, int contextSize)
@@ -88,34 +95,14 @@ namespace TinyGenerator.Services
                     }
                 }
 
-                var startMsg = $"Starting llama.cpp server (model={modelPath}, ctx={contextSize}, host={_llamaHost}, port={_llamaPort})";
+                var monomodelProfile = IsMonomodelProfileActive();
+                var startMsg = $"Starting llama.cpp server (model={modelPath}, ctx={contextSize}, host={_llamaHost}, port={_llamaPort}, monomodel_profile={monomodelProfile})";
                 _logger?.Log("Info", "llama.cpp", startMsg);
                 Console.WriteLine("[LlamaService] " + startMsg);
 
                 LogCudaPreflightOnce();
 
-                var args = $"--model \"{modelPath}\"";
-                if (_llamaGpuLayers != 0)
-                {
-                    args += $" --n-gpu-layers {_llamaGpuLayers}";
-                }
-                args += $" --ctx-size {contextSize} --port {_llamaPort} --host {_llamaHost}";
-
-                // llama-server's --device expects a device identifier (often indices), and does NOT accept the string "cuda".
-                // If the config contains "cuda" (common in older setups), omit the flag and let llama.cpp pick the default GPU.
-                var device = _llamaDevice?.Trim();
-                if (!string.IsNullOrWhiteSpace(device))
-                {
-                    if (device.Equals("cuda", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _logger?.Log("Warning", "llama.cpp",
-                            "Ignoring LlamaCpp:Device='cuda' (invalid for llama-server --device). Leave it empty or set a valid value from --list-devices.");
-                    }
-                    else
-                    {
-                        args += $" --device {device}";
-                    }
-                }
+                var args = BuildServerArguments(modelPath, contextSize, monomodelProfile);
 
                 _llamaServer = new Process
                 {
@@ -247,7 +234,7 @@ namespace TinyGenerator.Services
         /// <summary>
         /// Ensure the llama server is restarted before using it: if already running, stop and wait a short delay, then start.
         /// </summary>
-        public async Task EnsureRestartAsync(string modelName, int contextSize)
+        public async Task EnsureServerAsync(string modelName, int contextSize)
         {
             if (string.IsNullOrWhiteSpace(modelName)) throw new ArgumentException("Model name is required.", nameof(modelName));
             if (contextSize <= 0) contextSize = 32768;
@@ -309,6 +296,9 @@ namespace TinyGenerator.Services
                 throw;
             }
         }
+
+        public Task EnsureRestartAsync(string modelName, int contextSize)
+            => EnsureServerAsync(modelName, contextSize);
 
         private async Task<bool> IsSameModelAndContextAlreadyRunningAsync(string modelName, int contextSize)
         {
@@ -724,5 +714,100 @@ namespace TinyGenerator.Services
 
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr LoadLibraryW(string lpFileName);
+
+        private bool IsMonomodelProfileActive()
+        {
+            try
+            {
+                return _monomodelOptions?.CurrentValue?.Enabled ?? false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string BuildServerArguments(string modelPath, int contextSize, bool monomodelProfile)
+        {
+            var args = $"--model \"{modelPath}\"";
+            if (_llamaGpuLayers != 0)
+            {
+                args += $" --n-gpu-layers {_llamaGpuLayers}";
+            }
+
+            args += $" --ctx-size {contextSize} --port {_llamaPort} --host {_llamaHost}";
+
+            // llama-server's --device expects a device identifier (often indices), and does NOT accept the string "cuda".
+            // If the config contains "cuda" (common in older setups), omit the flag and let llama.cpp pick the default GPU.
+            var device = _llamaDevice?.Trim();
+            if (!string.IsNullOrWhiteSpace(device))
+            {
+                if (device.Equals("cuda", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger?.Log("Warning", "llama.cpp",
+                        "Ignoring LlamaCpp:Device='cuda' (invalid for llama-server --device). Leave it empty or set a valid value from --list-devices.");
+                }
+                else
+                {
+                    args += $" --device {device}";
+                }
+            }
+
+            if (!monomodelProfile)
+            {
+                return args;
+            }
+
+            var parallel = ParsePositiveInt(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelParallel"), fallback: 3);
+            var batchSize = ParsePositiveInt(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelBatchSize"), fallback: 2048);
+            var ubatchSize = ParsePositiveInt(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelUBatchSize"), fallback: 512);
+            var threads = ParseNonNegativeInt(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelThreads"));
+            var threadsBatch = ParseNonNegativeInt(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelThreadsBatch"));
+            var contBatching = ParseBool(ExternalServerConfig.GetRequiredValue(_configuration, "LlamaCpp:MonomodelContinuousBatching"), fallback: true);
+
+            args += $" --parallel {parallel}";
+            if (contBatching)
+            {
+                args += " --cont-batching";
+            }
+            if (batchSize > 0)
+            {
+                args += $" --batch-size {batchSize}";
+            }
+            if (ubatchSize > 0)
+            {
+                args += $" --ubatch-size {ubatchSize}";
+            }
+            if (threads > 0)
+            {
+                args += $" --threads {threads}";
+            }
+            if (threadsBatch > 0)
+            {
+                args += $" --threads-batch {threadsBatch}";
+            }
+
+            _logger?.Log(
+                "Info",
+                "llama.cpp",
+                $"Applying monomodel llama.cpp profile: parallel={parallel}, cont_batching={contBatching}, batch_size={batchSize}, ubatch_size={ubatchSize}, threads={threads}, threads_batch={threadsBatch}");
+
+            return args;
+        }
+
+        private static int ParsePositiveInt(string? raw, int fallback)
+        {
+            return int.TryParse(raw, out var parsed) && parsed > 0 ? parsed : fallback;
+        }
+
+        private static int ParseNonNegativeInt(string? raw)
+        {
+            return int.TryParse(raw, out var parsed) && parsed >= 0 ? parsed : 0;
+        }
+
+        private static bool ParseBool(string? raw, bool fallback)
+        {
+            return bool.TryParse(raw, out var parsed) ? parsed : fallback;
+        }
     }
 }

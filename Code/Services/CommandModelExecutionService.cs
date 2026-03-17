@@ -76,8 +76,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
     private readonly ICustomLogger? _logger;
     private readonly IOptions<ResponseValidationOptions>? _responseValidationOptions;
     private readonly IOptions<CommandPoliciesOptions>? _commandPoliciesOptions;
+    private readonly IOptionsMonitor<VllmServerOptions>? _vllmOptions;
     private readonly IOptionsMonitor<RepetitionDetectionOptions>? _repetitionDetectionOptions;
     private readonly IOptionsMonitor<EmbeddingRepetitionOptions>? _embeddingRepetitionOptions;
+    private volatile int _runtimeVllmMaxCtxOverride;
     private readonly Queue<List<string>> _recentSentenceNgrams = new();
     private readonly object _recentSentenceNgramsLock = new();
     private static readonly HttpClient EmbeddingHttpClient = new HttpClient();
@@ -131,6 +133,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         DatabaseService database,
         IOptions<CommandPoliciesOptions>? commandPoliciesOptions = null,
         IOptions<ResponseValidationOptions>? responseValidationOptions = null,
+        IOptionsMonitor<VllmServerOptions>? vllmOptions = null,
         IOptionsMonitor<RepetitionDetectionOptions>? repetitionDetectionOptions = null,
         IOptionsMonitor<EmbeddingRepetitionOptions>? embeddingRepetitionOptions = null,
         ICustomLogger? logger = null)
@@ -140,6 +143,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         _database = database;
         _commandPoliciesOptions = commandPoliciesOptions;
         _responseValidationOptions = responseValidationOptions;
+        _vllmOptions = vllmOptions;
         _repetitionDetectionOptions = repetitionDetectionOptions;
         _embeddingRepetitionOptions = embeddingRepetitionOptions;
         _logger = logger;
@@ -208,6 +212,11 @@ public sealed class CommandModelExecutionService : IAgentCallService
         var hadDeterministicFailure = false;
         var explained = false;
         var freeThinkingRetries = 0;
+        var freeVllmContextRetries = 0;
+        int? vllmNumCtxOverride = null;
+        string? lastNormalizedFailure = null;
+        var identicalFailureCount = 0;
+        var abortAfterIdenticalFailures = ResolveVllmIdenticalFailureAbortThreshold(modelName);
         var responseValidation = _responseValidationOptions?.Value;
         var (_, responsePolicy) = ResolveResponsePolicy(request.CommandKey, responseValidation);
         var rules = ResolveRules(responseValidation, responsePolicy);
@@ -224,6 +233,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         {
             ct.ThrowIfCancellationRequested();
             _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt}/{maxAttempts} (model={modelName})");
+            long? currentAttemptResponseLogId = null;
 
             using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (settings.StepTimeoutSec > 0)
@@ -246,6 +256,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     workingConversationMessages,
                     request.CommandKey,
                     request.ResponseFormat,
+                    vllmNumCtxOverride,
                     skipResponseChecker: true,
                     enableStreaming: request.EnableStreamingOutput,
                     streamChunkCallback: request.StreamChunkCallback,
@@ -258,7 +269,16 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 {
                     lastError = $"Risposta solo thinking senza output finale (limite retry gratuiti raggiunto: {maxFreeThinkingRetries})";
                     _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
-                    MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                    await FlushLogsBestEffortAsync().ConfigureAwait(false);
+                    var failedAttemptLogId = TryResolveLatestAttemptLogId(modelName, request.Agent!);
+                    MarkLatestAttemptResult(
+                        modelName,
+                        request.Agent!,
+                        "FAILED",
+                        lastError,
+                        examined: true,
+                        preferredLogId: failedAttemptLogId,
+                        roleCode: roleCode);
                     await NotifyAttemptFailureAsync(
                         request,
                         modelName,
@@ -278,6 +298,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     {
                         await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                         explained = true;
+                    }
+                    if (ShouldAbortForRepeatedVllmFailure(lastError, abortAfterIdenticalFailures, ref lastNormalizedFailure, ref identicalFailureCount))
+                    {
+                        break;
                     }
                     if (attempt < maxAttempts && delayMs > 0) await Task.Delay(delayMs, ct).ConfigureAwait(false);
                     continue;
@@ -307,7 +331,16 @@ public sealed class CommandModelExecutionService : IAgentCallService
             {
                 lastError = $"Timeout fase dopo {settings.StepTimeoutSec}s";
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito: {lastError}");
-                MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                await FlushLogsBestEffortAsync().ConfigureAwait(false);
+                var failedAttemptLogId = TryResolveLatestAttemptLogId(modelName, request.Agent!);
+                MarkLatestAttemptResult(
+                    modelName,
+                    request.Agent!,
+                    "FAILED",
+                    lastError,
+                    examined: true,
+                    preferredLogId: failedAttemptLogId,
+                    roleCode: roleCode);
                 await NotifyAttemptFailureAsync(
                     request,
                     modelName,
@@ -327,6 +360,25 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
+                }
+                if (IsNonRetriableVllmPromptContextError(lastError))
+                {
+                    if (TryPrepareVllmContextRetry(
+                            modelName,
+                            request.Agent,
+                            lastError,
+                            ref vllmNumCtxOverride,
+                            ref freeVllmContextRetries))
+                    {
+                        attempt--;
+                        continue;
+                    }
+
+                    break;
+                }
+                if (ShouldAbortForRepeatedVllmFailure(lastError, abortAfterIdenticalFailures, ref lastNormalizedFailure, ref identicalFailureCount))
+                {
+                    break;
                 }
                 if (attempt < maxAttempts && delayMs > 0) await Task.Delay(delayMs, ct).ConfigureAwait(false);
                 continue;
@@ -341,9 +393,18 @@ public sealed class CommandModelExecutionService : IAgentCallService
             }
             catch (Exception ex)
             {
-                lastError = ex.Message;
+                lastError = BuildExceptionErrorMessage(ex);
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} eccezione: {lastError}");
-                MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                await FlushLogsBestEffortAsync().ConfigureAwait(false);
+                var failedAttemptLogId = TryResolveLatestAttemptLogId(modelName, request.Agent);
+                MarkLatestAttemptResult(
+                    modelName,
+                    request.Agent,
+                    "FAILED",
+                    lastError,
+                    examined: true,
+                    preferredLogId: failedAttemptLogId,
+                    roleCode: roleCode);
                 await NotifyAttemptFailureAsync(
                     request,
                     modelName,
@@ -364,11 +425,33 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
                 }
+                if (IsNonRetriableVllmPromptContextError(lastError))
+                {
+                    _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Errore non retryabile (contesto vLLM): stop immediato dei retry.");
+                    if (TryPrepareVllmContextRetry(
+                            modelName,
+                            request.Agent,
+                            lastError,
+                            ref vllmNumCtxOverride,
+                            ref freeVllmContextRetries))
+                    {
+                        attempt--;
+                        continue;
+                    }
+
+                    break;
+                }
+                if (ShouldAbortForRepeatedVllmFailure(lastError, abortAfterIdenticalFailures, ref lastNormalizedFailure, ref identicalFailureCount))
+                {
+                    break;
+                }
                 if (attempt < maxAttempts && delayMs > 0) await Task.Delay(delayMs, ct).ConfigureAwait(false);
                 continue;
             }
 
+            await FlushLogsBestEffortAsync().ConfigureAwait(false);
             lastOutput = text;
+            currentAttemptResponseLogId = TryResolveLatestAttemptLogId(modelName, request.Agent);
             var deterministic = await ValidateGlobalDeterministicChecksAsync(
                 text,
                 settings,
@@ -389,10 +472,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt}: risposta JSON corretta automaticamente");
             }
 
-            if (!deterministic.IsValid)
-            {
-                lastError = string.IsNullOrWhiteSpace(deterministic.Reason) ? "Check deterministico fallito" : deterministic.Reason!;
-                hadDeterministicFailure = true;
+                if (!deterministic.IsValid)
+                {
+                    lastError = string.IsNullOrWhiteSpace(deterministic.Reason) ? "Check deterministico fallito" : deterministic.Reason!;
+                    hadDeterministicFailure = true;
                 _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} fallito (deterministico): {lastError}");
                 _logger?.Log(
                     "Warning",
@@ -409,7 +492,15 @@ public sealed class CommandModelExecutionService : IAgentCallService
                     reason: lastError,
                     promptSent: currentPrompt,
                     responseText: lastOutput);
-                MarkLatestAttemptResult(modelName, request.Agent, "FAILED", lastError, examined: true);
+                MarkLatestAttemptResult(
+                    modelName,
+                    request.Agent,
+                    "FAILED",
+                    lastError,
+                    examined: true,
+                    preferredLogId: currentAttemptResponseLogId,
+                    deterministic: true,
+                    roleCode: roleCode);
                 await NotifyAttemptFailureAsync(
                     request,
                     modelName,
@@ -429,6 +520,26 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 {
                     await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                     explained = true;
+                }
+                    if (IsNonRetriableVllmPromptContextError(lastError))
+                    {
+                        _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Errore non retryabile (contesto vLLM) in validazione deterministica: stop immediato.");
+                        if (TryPrepareVllmContextRetry(
+                                modelName,
+                                request.Agent,
+                                lastError,
+                                ref vllmNumCtxOverride,
+                                ref freeVllmContextRetries))
+                        {
+                            attempt--;
+                            continue;
+                        }
+
+                        break;
+                    }
+                if (ShouldAbortForRepeatedVllmFailure(lastError, abortAfterIdenticalFailures, ref lastNormalizedFailure, ref identicalFailureCount))
+                {
+                    break;
                 }
                 if (attempt < maxAttempts)
                 {
@@ -470,10 +581,18 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         modelName,
                         validationType: "checker",
                         attempt: attempt,
-                        reason: lastError,
-                        promptSent: currentPrompt,
-                        responseText: lastOutput);
-                    MarkLatestAttemptResult(modelName, request.Agent!, "FAILED", lastError, examined: true);
+                    reason: lastError,
+                    promptSent: currentPrompt,
+                    responseText: lastOutput);
+                    MarkLatestAttemptResult(
+                        modelName,
+                        request.Agent!,
+                        "FAILED",
+                        lastError,
+                        examined: true,
+                        preferredLogId: currentAttemptResponseLogId,
+                        checker: true,
+                        roleCode: roleCode);
                     await NotifyAttemptFailureAsync(
                         request,
                         modelName,
@@ -494,6 +613,26 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         await DiagnoseAsync(modelName, request, lastError, lastOutput, CancellationToken.None).ConfigureAwait(false);
                         explained = true;
                     }
+                    if (IsNonRetriableVllmPromptContextError(lastError))
+                    {
+                        _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Errore non retryabile (contesto vLLM) in checker: stop immediato.");
+                        if (TryPrepareVllmContextRetry(
+                                modelName,
+                                request.Agent,
+                                lastError,
+                                ref vllmNumCtxOverride,
+                                ref freeVllmContextRetries))
+                        {
+                            attempt--;
+                            continue;
+                        }
+
+                        break;
+                    }
+                    if (ShouldAbortForRepeatedVllmFailure(lastError, abortAfterIdenticalFailures, ref lastNormalizedFailure, ref identicalFailureCount))
+                    {
+                        break;
+                    }
                     if (attempt < maxAttempts)
                     {
                         currentPrompt = request.RetryPromptFactory?.Invoke(request.Prompt ?? string.Empty, lastError)
@@ -505,7 +644,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
             }
 
             _logger?.Append(request.RunId ?? string.Empty, $"[{roleCode}] Tentativo {attempt} riuscito");
-            MarkLatestAttemptResult(modelName, request.Agent!, "SUCCESS", null, examined: true);
+            MarkLatestAttemptResult(modelName, request.Agent!, "SUCCESS", null, examined: true, preferredLogId: currentAttemptResponseLogId);
             return new Result
             {
                 Success = true,
@@ -532,6 +671,300 @@ public sealed class CommandModelExecutionService : IAgentCallService
             DeterministicFailure = hadDeterministicFailure,
             AttemptsUsed = maxAttempts
         };
+    }
+
+    private static string BuildExceptionErrorMessage(Exception ex)
+    {
+        if (ex == null)
+        {
+            return "Errore sconosciuto";
+        }
+
+        var primary = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message.Trim();
+        var root = ex.GetBaseException();
+        if (root == null || ReferenceEquals(root, ex))
+        {
+            return primary;
+        }
+
+        var rootMessage = string.IsNullOrWhiteSpace(root.Message) ? root.GetType().Name : root.Message.Trim();
+        if (string.Equals(primary, rootMessage, StringComparison.Ordinal))
+        {
+            return primary;
+        }
+
+        return $"{primary} | root: {rootMessage}";
+    }
+
+    private int ResolveVllmIdenticalFailureAbortThreshold(string modelName)
+    {
+        if (!IsVllmModel(modelName))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, _vllmOptions?.CurrentValue?.AbortAfterIdenticalFailures ?? 0);
+    }
+
+    private bool IsVllmModel(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return false;
+        }
+
+        var lookup = modelName.Trim();
+        var modelInfo = _database.ListModels().FirstOrDefault(m =>
+            string.Equals(m.Name, lookup, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(m.CallName, lookup, StringComparison.OrdinalIgnoreCase));
+
+        return string.Equals(modelInfo?.Provider, "vllm", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool ShouldAbortForRepeatedVllmFailure(
+        string? failureReason,
+        int abortThreshold,
+        ref string? lastNormalizedFailure,
+        ref int identicalFailureCount)
+    {
+        if (abortThreshold <= 0)
+        {
+            return false;
+        }
+
+        var normalized = NormalizeFailureReason(failureReason);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            lastNormalizedFailure = null;
+            identicalFailureCount = 0;
+            return false;
+        }
+
+        if (string.Equals(lastNormalizedFailure, normalized, StringComparison.Ordinal))
+        {
+            identicalFailureCount++;
+        }
+        else
+        {
+            lastNormalizedFailure = normalized;
+            identicalFailureCount = 1;
+        }
+
+        return identicalFailureCount >= abortThreshold;
+    }
+
+    private static string NormalizeFailureReason(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return Regex.Replace(value.Trim(), @"\s+", " ");
+    }
+
+    private static bool IsNonRetriableVllmPromptContextError(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("vLLM prompt troppo lungo per il contesto disponibile", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("maximum context length", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("\"param\":\"input_tokens\"", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("max_model_len", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool TryPrepareVllmContextRetry(
+        string modelName,
+        Agent agent,
+        string? failureReason,
+        ref int? currentNumCtxOverride,
+        ref int freeVllmContextRetries)
+    {
+        if (!IsVllmModel(modelName))
+        {
+            return false;
+        }
+
+        if (!IsNonRetriableVllmPromptContextError(failureReason))
+        {
+            return false;
+        }
+
+        const int maxFreeContextRetries = 2;
+        if (freeVllmContextRetries >= maxFreeContextRetries)
+        {
+            return false;
+        }
+
+        var currentCtx = currentNumCtxOverride ?? ResolveNumCtxForAgent(agent, modelName) ?? 0;
+        var maxCtx = ResolveMaxNumCtxForAgent(agent, modelName);
+        var suggestedCtx = EstimateSuggestedNumCtxFromVllmError(failureReason);
+
+        if (suggestedCtx <= 0)
+        {
+            suggestedCtx = currentCtx > 0
+                ? (int)Math.Ceiling(currentCtx * 1.25)
+                : Math.Max(4096, _vllmOptions?.CurrentValue?.MaxModelLen ?? 4096);
+        }
+
+        var rawSuggestedCtx = suggestedCtx;
+
+        if (maxCtx > 0 && rawSuggestedCtx > maxCtx)
+        {
+            // Prova ad alzare dinamicamente max_model_len del server vLLM quando il limite locale
+            // impedisce il retry automatico.
+            var upgraded = TryRaiseVllmRuntimeContextCapacity(modelName, rawSuggestedCtx);
+            if (upgraded)
+            {
+                maxCtx = ResolveMaxNumCtxForAgent(agent, modelName);
+            }
+        }
+
+        if (maxCtx > 0)
+        {
+            suggestedCtx = Math.Min(suggestedCtx, maxCtx);
+        }
+
+        if (suggestedCtx <= currentCtx)
+        {
+            if (maxCtx > currentCtx)
+            {
+                suggestedCtx = maxCtx;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        currentNumCtxOverride = suggestedCtx;
+        freeVllmContextRetries++;
+        _logger?.Log(
+            "Information",
+            "CommandModelExecution",
+            $"vLLM auto-context retry {freeVllmContextRetries}/{maxFreeContextRetries}: num_ctx {currentCtx} -> {suggestedCtx} (model={modelName})");
+        return true;
+    }
+
+    private bool TryRaiseVllmRuntimeContextCapacity(string modelName, int requiredNumCtx)
+    {
+        if (requiredNumCtx <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var vllmService = scope.ServiceProvider.GetService<VllmService>();
+            if (vllmService == null)
+            {
+                return false;
+            }
+
+            var targetCtx = Math.Max(requiredNumCtx, _vllmOptions?.CurrentValue?.MaxModelLen ?? requiredNumCtx);
+            _logger?.Log(
+                "Information",
+                "CommandModelExecution",
+                $"vLLM context escalation requested: target_max_model_len={targetCtx} (model={modelName})");
+
+            var ensureResult = vllmService
+                .EnsureStartedAsync(
+                    model: modelName,
+                    servedModelName: modelName,
+                    requestedMaxModelLen: targetCtx,
+                    cancellationToken: CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+
+            if (!ensureResult.Success)
+            {
+                _logger?.Log(
+                    "Warning",
+                    "CommandModelExecution",
+                    $"vLLM context escalation failed: target_max_model_len={targetCtx}; reason={ensureResult.Message}; details={ensureResult.Details}");
+                return false;
+            }
+
+            _logger?.Log(
+                "Information",
+                "CommandModelExecution",
+                $"vLLM context escalation completed: target_max_model_len={targetCtx}; status={ensureResult.Message}");
+            _runtimeVllmMaxCtxOverride = Math.Max(_runtimeVllmMaxCtxOverride, targetCtx);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.Log(
+                "Warning",
+                "CommandModelExecution",
+                $"vLLM context escalation exception: {ex.Message}");
+            return false;
+        }
+    }
+
+    private int ResolveMaxNumCtxForAgent(Agent? agent, string? modelName)
+    {
+        try
+        {
+            var model = agent?.ModelId is > 0
+                ? _database.GetModelInfoById(agent.ModelId.Value)
+                : null;
+
+            if (model == null && !string.IsNullOrWhiteSpace(modelName))
+            {
+                model = _database.ListModels().FirstOrDefault(m =>
+                    string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(m.CallName, modelName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            var modelMax = model?.MaxContext is > 0 ? model.MaxContext : 0;
+            var optionsMax = _vllmOptions?.CurrentValue?.MaxModelLen ?? 0;
+            return Math.Max(Math.Max(modelMax, optionsMax), _runtimeVllmMaxCtxOverride);
+        }
+        catch
+        {
+            return Math.Max(_vllmOptions?.CurrentValue?.MaxModelLen ?? 0, _runtimeVllmMaxCtxOverride);
+        }
+    }
+
+    private static int EstimateSuggestedNumCtxFromVllmError(string? failureReason)
+    {
+        if (string.IsNullOrWhiteSpace(failureReason))
+        {
+            return 0;
+        }
+
+        var text = failureReason;
+
+        var currentCtxMatch = Regex.Match(text, @"num_ctx\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+        var inputMatch = Regex.Match(text, @"input_stimato\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+        var marginMatch = Regex.Match(text, @"margine_sicurezza\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+
+        if (inputMatch.Success)
+        {
+            var input = int.Parse(inputMatch.Groups[1].Value);
+            var margin = marginMatch.Success ? int.Parse(marginMatch.Groups[1].Value) : 256;
+            // piccolo extra buffer per evitare oscillazioni sul limite.
+            return input + margin + 96;
+        }
+
+        var maxModelLenMatch = Regex.Match(text, @"max_model_len(?:\s*=|\s+is\s+)(\d+)", RegexOptions.IgnoreCase);
+        if (maxModelLenMatch.Success)
+        {
+            return int.Parse(maxModelLenMatch.Groups[1].Value);
+        }
+
+        if (currentCtxMatch.Success)
+        {
+            var current = int.Parse(currentCtxMatch.Groups[1].Value);
+            return (int)Math.Ceiling(current * 1.25);
+        }
+
+        return 0;
     }
 
     private async Task<Result> TryFallbackAsync(Request request, ExecutionSettings settings, CancellationToken ct)
@@ -653,6 +1086,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         IReadOnlyList<ConversationMessage>? conversationMessages,
         string? operationScope,
         object? responseFormat,
+        int? numCtxOverride,
         bool skipResponseChecker,
         bool enableStreaming,
         Func<string, Task>? streamChunkCallback,
@@ -669,21 +1103,10 @@ public sealed class CommandModelExecutionService : IAgentCallService
             agent.NumPredict,
             effectiveThinking,
             useMaxTokens: false,
-            numCtx: ResolveNumCtxForAgent(agent, modelName));
+            numCtx: numCtxOverride ?? ResolveNumCtxForAgent(agent, modelName));
         bridge.ResponseFormat = responseFormat;
         bridge.EnableStreaming = enableStreaming && streamChunkCallback != null;
         bridge.StreamChunkCallbackAsync = streamChunkCallback;
-        try
-        {
-            Console.WriteLine(
-                $"[StoryLive TRACE] CallModelTextAsync role={roleCode} model={modelName} " +
-                $"enableStreamingRequested={enableStreaming} callback_present={streamChunkCallback != null} " +
-                $"bridge_enable_streaming={bridge.EnableStreaming}");
-        }
-        catch
-        {
-            // No-op: tracing must not break command execution.
-        }
 
         var messages = BuildConversationMessages(systemPrompt, prompt, conversationMessages);
 
@@ -703,32 +1126,12 @@ public sealed class CommandModelExecutionService : IAgentCallService
             new List<Dictionary<string, object>>(),
             ct,
             skipResponseChecker: skipResponseChecker).ConfigureAwait(false);
-        try
-        {
-            Console.WriteLine(
-                $"[StoryLive TRACE] CallModelTextAsync response_received role={roleCode} model={modelName} " +
-                $"response_json_len={(responseJson?.Length ?? 0)}");
-        }
-        catch
-        {
-            // No-op: tracing must not break command execution.
-        }
 
         var (text, _) = LangChainChatBridge.ParseChatResponse(responseJson);
         var parsedText = text ?? string.Empty;
         if (IsThinkingOnlyResponse(parsedText, responseJson))
         {
             throw new ThinkingOnlyResponseException("Model returned only thinking/reasoning content without final answer.");
-        }
-        try
-        {
-            Console.WriteLine(
-                $"[StoryLive TRACE] CallModelTextAsync parsed_text role={roleCode} model={modelName} " +
-                $"text_len={(parsedText.Length)}");
-        }
-        catch
-        {
-            // No-op: tracing must not break command execution.
         }
         return parsedText;
     }
@@ -1911,7 +2314,7 @@ public sealed class CommandModelExecutionService : IAgentCallService
         return Match(roleCode) || Match(agentRole);
     }
 
-    private async Task TryStopLlamaCppOnCancellationAsync(string modelName)
+    private Task TryStopLlamaCppOnCancellationAsync(string modelName)
     {
         try
         {
@@ -1919,36 +2322,46 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase));
             if (info == null || !string.Equals(info.Provider?.Trim(), "llama.cpp", StringComparison.OrdinalIgnoreCase))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             using var scope = _scopeFactory.CreateScope();
             var llama = scope.ServiceProvider.GetService<LlamaService>();
             if (llama == null)
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            await Task.Run(() => llama.StopServer()).ConfigureAwait(false);
-            _logger?.Log("Information", "CommandModelExecution", $"Cancellation received: llama.cpp server stopped for model={modelName}");
+            _logger?.Log("Information", "CommandModelExecution", $"Cancellation received: llama.cpp server kept alive for model={modelName}");
         }
         catch (Exception ex)
         {
             _logger?.Log("Warning", "CommandModelExecution", $"Cancellation received but llama.cpp stop failed for model={modelName}: {ex.Message}");
         }
+
+        return Task.CompletedTask;
     }
 
-    private void MarkLatestAttemptResult(string modelName, Agent agent, string result, string? failReason, bool examined)
+    private long? TryResolveLatestAttemptLogId(string modelName, Agent agent)
     {
         try
         {
             var threadId = LogScope.CurrentThreadId;
+            var storyId = LogScope.CurrentStoryId;
             var agentName = string.IsNullOrWhiteSpace(agent.Description) ? null : agent.Description;
             long? logId = null;
             if (threadId.HasValue && threadId.Value > 0)
             {
-                logId = _database.TryGetLatestModelResponseLogId(threadId.Value, agentName: agentName, modelName: modelName)
-                    ?? _database.TryGetLatestModelResponseLogId(threadId.Value, agentName: null, modelName: modelName);
+                logId = _database.TryGetLatestModelResponseLogId(
+                            threadId.Value,
+                            agentName: agentName,
+                            modelName: modelName,
+                            storyId: storyId)
+                    ?? _database.TryGetLatestModelResponseLogId(
+                            threadId.Value,
+                            agentName: null,
+                            modelName: modelName,
+                            storyId: storyId);
             }
 
             if (!logId.HasValue || logId.Value <= 0)
@@ -1956,21 +2369,175 @@ public sealed class CommandModelExecutionService : IAgentCallService
                 var scope = LogScope.Current;
                 if (!string.IsNullOrWhiteSpace(scope))
                 {
-                    logId = _database.TryGetLatestModelResponseLogIdByScope(scope, agentName: agentName, modelName: modelName)
-                        ?? _database.TryGetLatestModelResponseLogIdByScope(scope, agentName: null, modelName: modelName);
+                    logId = _database.TryGetLatestModelResponseLogIdByScope(
+                                scope,
+                                agentName: agentName,
+                                modelName: modelName,
+                                storyId: storyId)
+                        ?? _database.TryGetLatestModelResponseLogIdByScope(
+                                scope,
+                                agentName: null,
+                                modelName: modelName,
+                                storyId: storyId);
                 }
             }
 
             if (!logId.HasValue || logId.Value <= 0)
             {
-                return;
+                return null;
             }
 
-            _database.UpdateModelResponseResultById(logId.Value, result, failReason, examined);
+            return logId.Value;
         }
         catch
         {
             // best-effort
+            return null;
+        }
+    }
+
+    private async Task FlushLogsBestEffortAsync()
+    {
+        try
+        {
+            if (_logger != null)
+            {
+                await _logger.FlushAsync().ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    private void MarkLatestAttemptResult(
+        string modelName,
+        Agent agent,
+        string result,
+        string? failReason,
+        bool examined,
+        long? preferredLogId = null,
+        bool deterministic = false,
+        bool checker = false,
+        string? roleCode = null)
+    {
+        try
+        {
+            var effectiveFailReason = string.Equals(result, "FAILED", StringComparison.OrdinalIgnoreCase)
+                ? EnrichFailReasonWithSource(failReason, deterministic, checker, roleCode)
+                : failReason;
+
+            if (preferredLogId.HasValue && preferredLogId.Value > 0)
+            {
+                _database.UpdateModelResponseResultById(preferredLogId.Value, result, effectiveFailReason, examined);
+                return;
+            }
+
+            var resolvedId = TryResolveLatestAttemptLogId(modelName, agent);
+            if (!resolvedId.HasValue || resolvedId.Value <= 0)
+            {
+                return;
+            }
+
+            _database.UpdateModelResponseResultById(resolvedId.Value, result, effectiveFailReason, examined);
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    private static string? EnrichFailReasonWithSource(string? failReason, bool deterministic, bool checker, string? roleCode)
+    {
+        if (string.IsNullOrWhiteSpace(failReason))
+        {
+            return failReason;
+        }
+
+        var reason = failReason.Trim();
+        if (reason.StartsWith("[source=", StringComparison.OrdinalIgnoreCase))
+        {
+            return reason;
+        }
+
+        var details = FailureAttribution.Build(reason, deterministic, checker, roleCode);
+        return $"[source={details.Source}][origin={details.Origin}][role={details.Role}] {details.Message}";
+    }
+
+    private sealed class FailureAttribution
+    {
+        public string Source { get; init; } = "unknown";
+        public string Origin { get; init; } = "unknown";
+        public string Role { get; init; } = "unknown";
+        public string Message { get; init; } = string.Empty;
+
+        public static FailureAttribution Build(string reason, bool deterministic, bool checker, string? roleCode)
+        {
+            static bool Has(string text, string value) =>
+                text.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+            static string DetectDeterministicCheckName(string text)
+            {
+                if (Has(text, "JsonSchemaResponseFormatCheck") || Has(text, "json_response_format_check"))
+                {
+                    return "JsonSchemaResponseFormatCheck";
+                }
+
+                if (Has(text, "CheckFxMappingValidity"))
+                {
+                    return "CheckFxMappingValidity";
+                }
+
+                if (Has(text, "CheckMusicMappingValidity"))
+                {
+                    return "CheckMusicMappingValidity";
+                }
+
+                return "DeterministicCheck";
+            }
+
+            var safeRole = string.IsNullOrWhiteSpace(roleCode) ? "unknown" : roleCode.Trim();
+            var source = safeRole;
+            var origin = "model_call_failure";
+
+            if (deterministic)
+            {
+                source = DetectDeterministicCheckName(reason);
+                origin = "deterministic_validation";
+            }
+            else if (checker)
+            {
+                source = "response_checker";
+                origin = "checker_verdict";
+
+                if (Has(reason, "Checker call via CallCenter failed"))
+                {
+                    origin = "checker_call_failure";
+                }
+            }
+
+            if (Has(reason, "The operation was canceled") || Has(reason, "operation was canceled"))
+            {
+                source = checker ? "response_checker" : source;
+                origin = "operation_canceled";
+            }
+            else if (Has(reason, "HTTP 400") || Has(reason, "BadRequest"))
+            {
+                origin = "provider_bad_request";
+            }
+            else if (Has(reason, "prompt troppo lungo per il contesto") || Has(reason, "maximum context length"))
+            {
+                origin = "provider_context_limit";
+            }
+
+            return new FailureAttribution
+            {
+                Source = source,
+                Origin = origin,
+                Role = safeRole,
+                Message = reason
+            };
         }
     }
 }

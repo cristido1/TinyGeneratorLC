@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -723,32 +724,7 @@ public class NreEngine : IEngine
 
     private async Task PublishStoryLiveStartedAsync(EngineContext ctx, string? planSummary, IReadOnlyList<NarrativeBlock>? blocks)
     {
-        if (_storyLiveHub == null || ctx.StoryId <= 0)
-        {
-            return;
-        }
-
-        var payload = new
-        {
-            storyId = ctx.StoryId,
-            title = string.IsNullOrWhiteSpace(ctx.StoryTitle) ? $"Story {ctx.StoryId}" : ctx.StoryTitle,
-            agentName = ctx.WriterAgent?.Name ?? "N/A",
-            modelName = ResolveAgentModelName(ctx.WriterAgent) ?? "N/A",
-            nrePlanSummary = planSummary ?? string.Empty,
-            approvedText = BuildApprovedText(blocks),
-            ts = DateTime.UtcNow.ToString("o")
-        };
-
-        var group = BuildStoryLiveGroup(ctx.StoryId);
-        try
-        {
-            await _storyLiveHub.Clients.Group(group).SendAsync("StoryLiveStarted", payload, ctx.CancellationToken).ConfigureAwait(false);
-            await _storyLiveHub.Clients.All.SendAsync("StoryLiveStarted", payload, ctx.CancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // best-effort
-        }
+        await Task.CompletedTask;
     }
 
     private async Task PublishStoryLiveConsolidatedAsync(
@@ -759,89 +735,17 @@ public class NreEngine : IEngine
         int maxStep,
         string? phase)
     {
-        if (_storyLiveHub == null || ctx.StoryId <= 0)
-        {
-            return;
-        }
-
-        var approvedText = BuildApprovedText(blocks);
-
-        var payload = new
-        {
-            storyId = ctx.StoryId,
-            nrePlanSummary = planSummary ?? string.Empty,
-            approvedText,
-            currentStep,
-            maxStep,
-            phase = string.IsNullOrWhiteSpace(phase) ? null : phase,
-            ts = DateTime.UtcNow.ToString("o")
-        };
-
-        var group = BuildStoryLiveGroup(ctx.StoryId);
-        try
-        {
-            await _storyLiveHub.Clients.Group(group).SendAsync("StoryLiveConsolidated", payload, ctx.CancellationToken).ConfigureAwait(false);
-            await _storyLiveHub.Clients.All.SendAsync("StoryLiveConsolidated", payload, ctx.CancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // best-effort
-        }
+        await Task.CompletedTask;
     }
 
     private async Task PublishStoryLiveCompletedAsync(EngineContext ctx, string? planSummary, IReadOnlyList<NarrativeBlock>? blocks)
     {
-        if (_storyLiveHub == null || ctx.StoryId <= 0)
-        {
-            return;
-        }
-
-        var payload = new
-        {
-            storyId = ctx.StoryId,
-            nrePlanSummary = planSummary ?? string.Empty,
-            approvedText = BuildApprovedText(blocks),
-            ts = DateTime.UtcNow.ToString("o")
-        };
-
-        var group = BuildStoryLiveGroup(ctx.StoryId);
-        try
-        {
-            await _storyLiveHub.Clients.Group(group).SendAsync("StoryLiveCompleted", payload, ctx.CancellationToken).ConfigureAwait(false);
-            await _storyLiveHub.Clients.All.SendAsync("StoryLiveCompleted", payload, ctx.CancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // best-effort
-        }
+        await Task.CompletedTask;
     }
 
     private async Task PublishStoryLiveFailedAsync(EngineContext ctx, string? error, string? planSummary, IReadOnlyList<NarrativeBlock>? blocks)
     {
-        if (_storyLiveHub == null || ctx.StoryId <= 0)
-        {
-            return;
-        }
-
-        var payload = new
-        {
-            storyId = ctx.StoryId,
-            error = string.IsNullOrWhiteSpace(error) ? "Errore durante la generazione." : error,
-            nrePlanSummary = planSummary ?? string.Empty,
-            approvedText = BuildApprovedText(blocks),
-            ts = DateTime.UtcNow.ToString("o")
-        };
-
-        var group = BuildStoryLiveGroup(ctx.StoryId);
-        try
-        {
-            await _storyLiveHub.Clients.Group(group).SendAsync("StoryLiveFailed", payload, ctx.CancellationToken).ConfigureAwait(false);
-            await _storyLiveHub.Clients.All.SendAsync("StoryLiveFailed", payload, ctx.CancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            // best-effort
-        }
+        await Task.CompletedTask;
     }
 
     private async Task<List<NarrativePhase>> BuildPlanningAsync(
@@ -849,15 +753,19 @@ public class NreEngine : IEngine
         int requestedPhases,
         NarrativeRuntimeEngineOptions nreOptions)
     {
-        var plannerInput = BuildPlannerUserInput(ctx.Request.UserPrompt!, requestedPhases);
+        var plannerInput = BuildPlannerUserInput(
+            ctx.Request.UserPrompt!,
+            requestedPhases,
+            ctx.Request.StructureMode,
+            ctx.Request.CostSeverity,
+            ctx.Request.CombatIntensity);
         var plannerResult = await CallAgentAsync(
             ctx,
             ctx.PlannerAgent!,
             "nre_planner",
             plannerInput,
             TimeSpan.FromSeconds(Math.Max(5, nreOptions.PlannerCallTimeoutSeconds)),
-            nreOptions,
-            systemPromptOverride: BuildPlannerSystemPrompt(ctx.Request.StructureMode, ctx.Request.CostSeverity, ctx.Request.CombatIntensity, requestedPhases)).ConfigureAwait(false);
+            nreOptions).ConfigureAwait(false);
 
         if (!plannerResult.Success)
         {
@@ -875,7 +783,7 @@ public class NreEngine : IEngine
             ctx.Request.StructureMode,
             ctx.Request.CostSeverity,
             ctx.Request.CombatIntensity,
-            plannerResult.ResponseText ?? string.Empty);
+            phases);
         ReportLive(
             ctx,
             operationName: "run_nre:plan_evaluator",
@@ -900,6 +808,11 @@ public class NreEngine : IEngine
 
         if (!TryParseEvaluator(planEvaluationResult.ResponseText, out var planEvaluation, out var evalParseError))
         {
+            MarkLatestAgentResponseAsFailed(
+                ctx,
+                ctx.PlanEvaluatorAgent,
+                planEvaluationResult.ModelUsed,
+                $"[source=nre_plan_evaluator] Plan evaluator JSON non valido: {evalParseError}");
             throw new InvalidOperationException($"Plan evaluator JSON non valido: {evalParseError}");
         }
 
@@ -914,6 +827,13 @@ public class NreEngine : IEngine
                 .Select(i => i.Trim())
                 .ToList();
             var issuesText = issues.Count == 0 ? "nessun dettaglio" : string.Join(" | ", issues);
+            var failureReason =
+                $"[source=nre_plan_evaluator] Piano NRE bocciato da nre_plan_evaluator: score={normalizedScore}, min={minScore}, needs_retry={planEvaluation.NeedsRetry}. Issues: {issuesText}";
+            MarkLatestAgentResponseAsFailed(
+                ctx,
+                ctx.PlanEvaluatorAgent,
+                planEvaluationResult.ModelUsed,
+                failureReason);
             throw new InvalidOperationException(
                 $"Piano NRE bocciato da nre_plan_evaluator: score={normalizedScore}, min={minScore}, needs_retry={planEvaluation.NeedsRetry}. Issues: {issuesText}");
         }
@@ -1447,10 +1367,38 @@ public class NreEngine : IEngine
         return Math.Max(1, (int)Math.Ceiling(safeMaxSteps * safeMultiplier));
     }
 
-    private static string BuildPlannerUserInput(string prompt, int maxSteps)
+    private static string BuildPlannerUserInput(
+        string prompt,
+        int maxSteps,
+        string? structureMode,
+        string? costSeverity,
+        string? combatIntensity)
     {
-        return $"Tema: {prompt.Trim()}{Environment.NewLine}" +
-               $"Numero di fasi desiderate: {maxSteps}";
+        var mode = NormalizeStructureMode(structureMode);
+        var safePrompt = prompt?.Trim() ?? string.Empty;
+        var sb = new StringBuilder();
+        sb.AppendLine($"Tema: {safePrompt}");
+        sb.AppendLine($"Numero di fasi desiderate: {Math.Max(1, maxSteps)}");
+        sb.AppendLine();
+        sb.AppendLine("Vincoli runtime (da rispettare insieme alle instruction dell'agente):");
+        sb.AppendLine("- Rispondi SOLO con JSON valido conforme al response_format della richiesta.");
+        sb.AppendLine($"- Devono esserci esattamente {Math.Max(1, maxSteps)} fasi.");
+        sb.AppendLine("- Progressione logica e causale.");
+        sb.AppendLine("- Ogni fase deve introdurre un cambiamento reale.");
+        sb.AppendLine("- Non scrivere testo narrativo fuori dal JSON.");
+
+        if (string.Equals(mode, "military_strict", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine();
+            sb.AppendLine("Modalita: military_strict");
+            sb.AppendLine($"- CostSeverity={NormalizeCostSeverity(costSeverity)}");
+            sb.AppendLine($"- CombatIntensity={NormalizeCombatIntensity(combatIntensity)}");
+            sb.AppendLine("- Ogni fase deve avere obiettivo militare esplicito e conflitto operativo concreto.");
+            sb.AppendLine("- La tensione deve crescere (per quanto possibile).");
+            sb.AppendLine("- Non e' permessa una risoluzione completa del conflitto.");
+        }
+
+        return sb.ToString().Trim();
     }
 
     private static string BuildPlannerSystemPrompt(string? structureMode, string? costSeverity, string? combatIntensity, int requestedPhases)
@@ -1740,11 +1688,12 @@ public class NreEngine : IEngine
         string? structureMode,
         string? costSeverity,
         string? combatIntensity,
-        string candidatePlanJson)
+        IReadOnlyList<NarrativePhase> candidatePhases)
     {
         var normalizedStructureMode = NormalizeStructureMode(structureMode);
         var normalizedCostSeverity = NormalizeCostSeverity(costSeverity);
         var normalizedCombatIntensity = NormalizeCombatIntensity(combatIntensity);
+        var candidatePlanYaml = BuildPlannerPhasesYaml(candidatePhases);
 
         return
             $@"Prompt iniziale:
@@ -1756,12 +1705,52 @@ Vincoli planning:
 - cost_severity: {normalizedCostSeverity}
 - combat_intensity: {normalizedCombatIntensity}
 
-Valuta se il piano JSON del planner e' coerente con prompt e vincoli, ha progressione causale e fasi concrete.
+Valuta se il piano del planner e' coerente con prompt e vincoli, ha progressione causale e fasi concrete.
 Boccia se piano generico, incoerente, non progressivo o non allineato ai vincoli.
+NON valutare la sintassi/struttura JSON del piano: e' gia' stata validata a monte.
 Rispondi SOLO in JSON valido secondo il response_format configurato per nre_plan_evaluator.
 
-CandidateResponse JSON planner:
-{candidatePlanJson}";
+CandidateResponse planner (YAML):
+{candidatePlanYaml}";
+    }
+
+    private static string BuildPlannerPhasesYaml(IReadOnlyList<NarrativePhase> phases)
+    {
+        if (phases == null || phases.Count == 0)
+        {
+            return "phases: []";
+        }
+
+        static string Esc(string? value)
+        {
+            var raw = (value ?? string.Empty).Trim().Replace("\r\n", "\n").Replace("\r", "\n");
+            var singleLine = raw.Replace("\n", " ");
+            return singleLine.Replace("\"", "\\\"");
+        }
+
+        var ordered = phases
+            .Where(p => p != null)
+            .OrderBy(p => p.Index <= 0 ? int.MaxValue : p.Index)
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("phases:");
+        foreach (var p in ordered)
+        {
+            var index = p.Index <= 0 ? 1 : p.Index;
+            var name = string.IsNullOrWhiteSpace(p.Name) ? $"Fase {index}" : p.Name;
+            var objective = p.Objective ?? string.Empty;
+            var conflict = p.Conflict ?? string.Empty;
+            var tension = p.TensionLevel;
+
+            sb.AppendLine($"  - index: {index}");
+            sb.AppendLine($"    name: \"{Esc(name)}\"");
+            sb.AppendLine($"    objective: \"{Esc(objective)}\"");
+            sb.AppendLine($"    conflict: \"{Esc(conflict)}\"");
+            sb.AppendLine($"    tension_level: {tension}");
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     private static bool TryParsePlanner(string? json, out List<NarrativePhase> phases, out string? error)
@@ -2119,6 +2108,72 @@ CandidateResponse JSON planner:
         if (ctx.Trace.Count > maxTraceEvents)
         {
             ctx.Trace.RemoveRange(0, ctx.Trace.Count - maxTraceEvents);
+        }
+    }
+
+    private static void MarkLatestAgentResponseAsFailed(
+        EngineContext ctx,
+        Agent? agent,
+        string? modelUsed,
+        string failReason)
+    {
+        if (ctx == null || ctx.StoryId <= 0 || agent == null || string.IsNullOrWhiteSpace(failReason))
+        {
+            return;
+        }
+
+        try
+        {
+            var database = ServiceLocator.Services?.GetService(typeof(DatabaseService)) as DatabaseService;
+            if (database == null)
+            {
+                return;
+            }
+
+            var agentName = string.IsNullOrWhiteSpace(agent.Name) ? null : agent.Name.Trim();
+            var modelName = string.IsNullOrWhiteSpace(modelUsed)
+                ? ResolveAgentModelName(agent)
+                : modelUsed.Trim();
+
+            long? logId = null;
+            if (ctx.ThreadId > 0)
+            {
+                logId = database.TryGetLatestModelResponseLogId(
+                    ctx.ThreadId,
+                    agentName: agentName,
+                    modelName: modelName,
+                    storyId: ctx.StoryId);
+            }
+
+            if (!logId.HasValue || logId.Value <= 0)
+            {
+                var storyLogs = database.GetLogsByStoryId(ctx.StoryId, limit: 300);
+                logId = storyLogs
+                    .Where(l =>
+                        l?.Id.HasValue == true &&
+                        (string.Equals(l.Category, "ModelResponse", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(l.Category, "ModelCompletion", StringComparison.OrdinalIgnoreCase)) &&
+                        (string.IsNullOrWhiteSpace(agentName) ||
+                         string.Equals((l.AgentName ?? string.Empty).Trim(), agentName, StringComparison.OrdinalIgnoreCase)) &&
+                        (string.IsNullOrWhiteSpace(modelName) ||
+                         string.Equals((l.ModelName ?? string.Empty).Trim(), modelName, StringComparison.OrdinalIgnoreCase)))
+                    .OrderByDescending(l => l!.Id!.Value)
+                    .Select(l => l!.Id)
+                    .FirstOrDefault();
+            }
+
+            if (logId.HasValue && logId.Value > 0)
+            {
+                database.UpdateModelResponseResultById(
+                    logId.Value,
+                    "FAILED",
+                    failReason.Trim(),
+                    examined: true);
+            }
+        }
+        catch
+        {
+            // best effort: non bloccare il flusso NRE per errori di marcatura log
         }
     }
 

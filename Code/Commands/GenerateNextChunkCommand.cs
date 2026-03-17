@@ -558,9 +558,40 @@ public sealed class GenerateNextChunkCommand : ICommand
     {
         var sb = new StringBuilder();
         sb.AppendLine("ATTENZIONE: il tuo output precedente NON era valido.");
-        sb.AppendLine("Motivo: " + reason);
+
+        var modelMessage = BuildModelFriendlyErrorMessage(reason);
+        sb.AppendLine("Motivo: " + modelMessage);
         sb.AppendLine("Rigenera la risposta COMPLETA rispettando tutti i vincoli.");
         return sb.ToString();
+    }
+
+    private static string BuildModelFriendlyErrorMessage(string reason)
+    {
+        // Frasi duplicate tra blocchi
+        if (reason.Contains("Frasi duplicate tra blocchi", StringComparison.OrdinalIgnoreCase) ||
+            reason.Contains("Frase duplicata", StringComparison.OrdinalIgnoreCase))
+        {
+            var duplicate = ExtractDetailValue(reason);
+            if (!string.IsNullOrWhiteSpace(duplicate))
+                return $"Hai scritto una frase già presente nella storia precedente: '{duplicate}'. Usa frasi completamente diverse — nessuna parola o costrutto già usato in quel modo.";
+            return "Hai ripetuto una frase già presente nella storia. Scrivi contenuto completamente nuovo, senza ripetere frasi o costrutti già usati.";
+        }
+
+        return reason;
+    }
+
+    private static string? ExtractDetailValue(string reason)
+    {
+        const string marker = "DETAIL:";
+        var idx = reason.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return null;
+        var detail = reason[(idx + marker.Length)..].Trim();
+        // Estrae il testo tra apici singoli se presente
+        var start = detail.IndexOf('\'');
+        var end = detail.LastIndexOf('\'');
+        if (start >= 0 && end > start)
+            return detail[(start + 1)..end];
+        return detail.Length > 200 ? detail[..200] : detail;
     }
 
     private Dictionary<string, object> BuildNarrativeChecksOptions(string storyHistory, string phase, string pov)
@@ -1023,7 +1054,30 @@ public sealed class GenerateNextChunkCommand : ICommand
         if (string.IsNullOrEmpty(text)) return string.Empty;
         if (maxChars <= 0) return string.Empty;
         var t = text.Trim();
-        return t.Length <= maxChars ? t : t.Substring(t.Length - maxChars);
+        if (t.Length <= maxChars)
+        {
+            return t;
+        }
+
+        var rawTail = t.Substring(t.Length - maxChars).TrimStart();
+        if (string.IsNullOrWhiteSpace(rawTail))
+        {
+            return rawTail;
+        }
+
+        // Evita di partire a meta' frase: se possibile allinea l'inizio
+        // al primo delimitatore di fine frase nel frammento.
+        var firstSentenceBreak = rawTail.IndexOfAny(new[] { '.', '!', '?' });
+        if (firstSentenceBreak >= 0 && firstSentenceBreak + 1 < rawTail.Length)
+        {
+            var aligned = rawTail.Substring(firstSentenceBreak + 1).TrimStart();
+            if (!string.IsNullOrWhiteSpace(aligned))
+            {
+                return aligned;
+            }
+        }
+
+        return rawTail;
     }
 
     private sealed record ResourceManagerUpdateResult(bool Success, string? CanonStateJson, string? Error);

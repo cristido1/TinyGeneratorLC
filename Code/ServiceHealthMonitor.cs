@@ -27,20 +27,15 @@ public class ServiceHealthMonitor : IServiceHealthMonitor
         _logger = logger;
 
         // Load endpoint from config with fallback
-        _audioCraftHealthEndpoint = configuration["Startup:AudioCraft:HealthEndpoint"] 
+        _audioCraftHealthEndpoint = configuration["Startup:AudioCraft:HealthEndpoint"]
             ?? "http://localhost:8003/health";
-        var ttsHost = Environment.GetEnvironmentVariable("TTS_HOST")
-            ?? Environment.GetEnvironmentVariable("HOST")
-            ?? "127.0.0.1";
-        var ttsPortRaw = Environment.GetEnvironmentVariable("TTS_PORT")
-            ?? Environment.GetEnvironmentVariable("PORT")
-            ?? "8004";
+        var ttsHost = ExternalServerConfig.GetRequiredValue(configuration, "LocalTts:Host");
+        var ttsPortRaw = ExternalServerConfig.GetRequiredValue(configuration, "LocalTts:Port");
         if (!int.TryParse(ttsPortRaw, out var ttsPort))
         {
-            ttsPort = 8004;
+            throw new InvalidOperationException("Configurazione non valida: ExternalServers:LocalTts:Port");
         }
-        _ttsHealthEndpoint = configuration["Startup:Tts:HealthEndpoint"]
-            ?? $"http://{ttsHost}:{ttsPort}/health";
+        _ttsHealthEndpoint = ExternalServerConfig.GetRequiredValue(configuration, "LocalTts:HealthEndpoint");
     }
 
     public async Task<bool> CheckAudioCraftHealthAsync(CancellationToken cancellationToken = default)

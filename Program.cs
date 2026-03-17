@@ -36,7 +36,11 @@ if (builder.Environment.IsDevelopment())
 }
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
-builder.Logging.SetMinimumLevel(LogLevel.Debug);
+builder.Logging.SetMinimumLevel(LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+builder.Logging.AddFilter("System", LogLevel.Warning);
+builder.Logging.AddFilter("TinyGenerator", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 
 // Load secrets file (kept out of source control) if present.
 var secretsPath = Path.Combine(builder.Environment.ContentRootPath, "appsettings.secrets.json");
@@ -89,7 +93,14 @@ builder.Services.AddSingleton<ITokenizer>(sp => new TokenizerService("cl100k_bas
 
 // Ollama monitor service (used for discovering/running local Ollama models)
 // Instantiate without ICustomLogger to avoid circular dependency (DatabaseService -> IOllamaMonitorService -> ICustomLogger -> DatabaseService)
-builder.Services.AddSingleton<IOllamaMonitorService>(sp => new OllamaMonitorService(null));
+builder.Services.AddSingleton<IOllamaMonitorService>(sp =>
+{
+    var monitor = new OllamaMonitorService(null);
+    var config = sp.GetRequiredService<IConfiguration>();
+    var endpoint = ExternalServerConfig.GetRequiredValue(config, "Ollama:Endpoint");
+    monitor.SetOllamaEndpoint(endpoint);
+    return monitor;
+});
 
 // Database access service + cost controller (sqlite) - register early so other services can depend on it
 builder.Services.AddSingleton(sp => new TinyGenerator.Services.DatabaseService(
@@ -256,6 +267,7 @@ else
 builder.Services.Configure<StateDrivenStoryGenerationOptions>(builder.Configuration.GetSection("StateDrivenStoryGeneration"));
 builder.Services.Configure<NarrativeRuntimeEngineOptions>(builder.Configuration.GetSection("NarrativeRuntimeEngine"));
 builder.Services.Configure<MonomodelModeOptions>(builder.Configuration.GetSection("MonomodelMode"));
+builder.Services.Configure<VllmServerOptions>(ExternalServerConfig.GetRequiredSection(builder.Configuration, "vLLM"));
 builder.Services.AddSingleton<TextValidationService>();
 // TTS schema generation options (pause/gap between phrases)
 builder.Services.Configure<TtsSchemaGenerationOptions>(builder.Configuration.GetSection("TtsSchemaGeneration"));
@@ -343,6 +355,7 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     soundSearchService: sp.GetService<SoundSearchService>()));
 builder.Services.AddSingleton<LogAnalysisService>();
 builder.Services.AddSingleton<SystemReportService>();
+builder.Services.AddSingleton<ExternalServicesMonitorService>();
 builder.Services.AddSingleton<CommandModelExecutionService>();
 builder.Services.AddSingleton<IAgentCallService>(sp => sp.GetRequiredService<CommandModelExecutionService>());
 builder.Services.AddSingleton<SnapshotWriter>();
@@ -378,6 +391,7 @@ builder.Services.AddSingleton<LangChainToolFactory>(sp => new LangChainToolFacto
 // LangChain kernel factory (creates and caches orchestrators)
 builder.Services.AddSingleton<LlamaService>(sp => new LlamaService(
     sp.GetRequiredService<IConfiguration>(),
+    sp.GetService<IOptionsMonitor<MonomodelModeOptions>>(),
     sp.GetService<ICustomLogger>()));
 builder.Services.AddSingleton<LangChainKernelFactory>(sp => 
 {
@@ -419,10 +433,16 @@ builder.Services.AddSingleton<ICustomLogger>(sp => new CustomLogger(
 builder.Services.AddSingleton<ILoggerProvider>(sp => new CustomLoggerProvider(sp));
 // TTS service configuration: read HOST/PORT from environment with defaults
 // Use localhost as default so HttpClient can reach the local TTS server.
-var ttsHost = Environment.GetEnvironmentVariable("TTS_HOST") ?? Environment.GetEnvironmentVariable("HOST") ?? "127.0.0.1";
-var ttsPortRaw = Environment.GetEnvironmentVariable("TTS_PORT") ?? Environment.GetEnvironmentVariable("PORT") ?? "8004";
-if (!int.TryParse(ttsPortRaw, out var ttsPort)) ttsPort = 8004;
-var ttsOptions = new TtsOptions { Host = ttsHost, Port = ttsPort };
+var ttsOptions = new TtsOptions();
+ExternalServerConfig.GetRequiredSection(builder.Configuration, "LocalTts").Bind(ttsOptions);
+if (string.IsNullOrWhiteSpace(ttsOptions.Host))
+{
+    throw new InvalidOperationException("Configurazione obbligatoria mancante: ExternalServers:LocalTts:Host");
+}
+if (ttsOptions.Port <= 0)
+{
+    throw new InvalidOperationException("Configurazione obbligatoria non valida: ExternalServers:LocalTts:Port");
+}
 // Allow overriding timeout via environment variable TTS_TIMEOUT_SECONDS (seconds)
 var ttsTimeoutRaw = Environment.GetEnvironmentVariable("TTS_TIMEOUT_SECONDS");
 if (!int.TryParse(ttsTimeoutRaw, out var ttsTimeout)) ttsTimeout = ttsOptions.TimeoutSeconds;
@@ -464,6 +484,7 @@ builder.Services.AddHttpClient<TtsService>(client =>
 
 // Ollama management service
 builder.Services.AddSingleton<IOllamaManagementService, OllamaManagementService>();
+builder.Services.AddSingleton<VllmService>();
 
 Console.WriteLine($"[Startup] About to call builder.Build() at {DateTime.UtcNow:o}");
 var app = builder.Build();
@@ -683,7 +704,6 @@ app.UseAuthorization();
 
 // SignalR hubs
 app.MapHub<ProgressHub>("/progressHub");
-app.MapHub<StoryLiveHub>("/storyLiveHub");
 
 app.MapRazorPages();
 app.MapControllers();

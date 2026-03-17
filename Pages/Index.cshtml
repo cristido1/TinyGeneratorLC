@@ -51,6 +51,15 @@
         font-size: 1.2rem;
         opacity: 0.8;
     }
+    .kpi-card.kpi-brown-soft {
+        background: #f4ede4;
+        border-color: #b7a58f;
+    }
+    .kpi-link {
+        text-decoration: none;
+        color: inherit;
+        display: block;
+    }
     .ranking-table {
         background: #f8f9fa;
         border: 2px solid #343a40;
@@ -295,6 +304,14 @@
         </div>
     </div>
 
+    @{
+        var logRecordsKpi = Model.AdditionalKpis.FirstOrDefault(k =>
+            string.Equals(k.Code, "KPI_32", StringComparison.OrdinalIgnoreCase));
+        var additionalKpisWithoutLogCount = Model.AdditionalKpis
+            .Where(k => !string.Equals(k.Code, "KPI_32", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
     <!-- KPI Cards Row -->
     <div class="row g-2 mb-2">
         <div class="col-6 col-md-3 col-xl-2">
@@ -342,7 +359,7 @@
             </div>
         </div>
         <div class="col-6 col-md-3 col-xl-2">
-            <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_DB_SIZE", "DB Size")">
+            <div class="kpi-card kpi-compact kpi-brown-soft" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip("KPI_DB_SIZE", "DB Size")">
                 <div class="d-flex justify-content-between align-items-start">
                     <div>
                         <div class="kpi-value">@Model.DatabaseSizeMb.ToString("F2")</div>
@@ -352,11 +369,28 @@
                 </div>
             </div>
         </div>
+        @if (logRecordsKpi != null)
+        {
+            <div class="col-6 col-md-3 col-xl-2">
+                <a class="kpi-link" href="@Url.Page("/Logs/Index")">
+                    <div class="kpi-card kpi-compact kpi-brown-soft" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip(logRecordsKpi.Code, logRecordsKpi.Label)">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="kpi-value">@logRecordsKpi.Value</div>
+                                <div class="kpi-label mt-1">@logRecordsKpi.Label</div>
+                                <small class="text-muted">@logRecordsKpi.Code</small>
+                            </div>
+                            <i class="bi bi-journal-richtext kpi-icon"></i>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        }
     </div>
-    @if (Model.AdditionalKpis.Any())
+    @if (additionalKpisWithoutLogCount.Any())
     {
         <div class="row g-2 mb-4">
-            @foreach (var kpi in Model.AdditionalKpis)
+            @foreach (var kpi in additionalKpisWithoutLogCount)
             {
                 <div class="col-6 col-md-3 col-xl-2">
                     <div class="kpi-card kpi-compact" data-bs-toggle="tooltip" data-bs-placement="top" title="@Model.GetKpiTooltip(kpi.Code, kpi.Label)">

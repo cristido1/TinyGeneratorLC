@@ -128,6 +128,43 @@ public sealed partial class StoriesService
     internal CommandTuningOptions Tuning => _tuning;
     internal IServiceScopeFactory? ScopeFactory => _scopeFactory;
 
+    internal bool IsCurrentDispatcherRunStatusChain()
+    {
+        var runId = CurrentDispatcherRunId;
+        if (string.IsNullOrWhiteSpace(runId) || _commandDispatcher == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var snapshot = _commandDispatcher.GetActiveCommands()
+                .FirstOrDefault(s => string.Equals(s.RunId, runId, StringComparison.OrdinalIgnoreCase));
+            if (snapshot?.Metadata == null)
+            {
+                return false;
+            }
+
+            if (snapshot.Metadata.TryGetValue("chainMode", out var chainMode) &&
+                string.Equals(chainMode, "1", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.ThreadScope) &&
+                snapshot.ThreadScope.StartsWith("story/status_chain", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        return false;
+    }
+
     public long SaveGeneration(string prompt, StoryGenerationResult r, string? memoryKey = null)
     {
         return _database.SaveGeneration(prompt, r, memoryKey);
@@ -1570,6 +1607,25 @@ public sealed partial class StoriesService
             ?? ServiceLocator.Services?.GetService<ICallCenter>();
         if (callCenter == null) return (false, 0, "ICallCenter non disponibile");
 
+        var contextLimitTokens = ResolveEvaluatorContextLimitTokens(modelId);
+        const int expectedOutputTokens = 96;
+        const int maxContextReductionRetries = 3;
+        var contextReductionRetry = 0;
+        var hadContextLimitFailure = false;
+        var storyTextForEvaluation = BuildEvaluationStoryTextForBudget(
+            storyText,
+            systemMessage,
+            contextLimitTokens,
+            expectedOutputTokens,
+            extraSafetyTokens: 0);
+
+        if (!string.Equals(storyTextForEvaluation, storyText, StringComparison.Ordinal))
+        {
+            _customLogger?.Append(
+                $"evaluate_story_{story.Id}_agent_{agentId}",
+                $"[{story.Id}] story_evaluator pre-trim attivato: chars {storyText.Length} -> {storyTextForEvaluation.Length}; context_limit={contextLimitTokens}; output_budget={expectedOutputTokens}");
+        }
+
         var messages = new List<ConversationMessage>
         {
             new ConversationMessage { Role = "system", Content = systemMessage }
@@ -1581,7 +1637,7 @@ public sealed partial class StoriesService
         messages.Add(new ConversationMessage
         {
             Role = "user",
-            Content = $"TESTO:\n\n{storyText}\n\nVALUTA"
+            Content = BuildStoryEvaluatorUserMessage(storyTextForEvaluation)
         });
 
         var parsed = new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
@@ -1612,6 +1668,63 @@ public sealed partial class StoriesService
                     SystemPromptOverride = systemMessage
                 }).ConfigureAwait(false);
 
+            if (!evalResult.Success)
+            {
+                var failureReason = string.IsNullOrWhiteSpace(evalResult.FailureReason)
+                    ? "Valutazione fallita."
+                    : evalResult.FailureReason!;
+
+                if (IsProviderContextLimitError(failureReason))
+                {
+                    hadContextLimitFailure = true;
+                    if (contextReductionRetry < maxContextReductionRetries)
+                    {
+                        contextReductionRetry++;
+                        var parsedOutputTokens = 0;
+                        var parsedInputTokens = 0;
+                        var parsedSafetyTokens = 0;
+
+                        if (TryParseProviderContextLimitError(
+                                failureReason,
+                                out var parsedContextLimit,
+                                out parsedOutputTokens,
+                                out parsedInputTokens,
+                                out parsedSafetyTokens))
+                        {
+                            if (parsedContextLimit > 0)
+                            {
+                                contextLimitTokens = parsedContextLimit;
+                            }
+                        }
+
+                        var effectiveOutputBudget = parsedOutputTokens > 0 ? parsedOutputTokens : expectedOutputTokens;
+                        storyTextForEvaluation = BuildEvaluationStoryTextForBudget(
+                            storyText,
+                            systemMessage,
+                            contextLimitTokens,
+                            effectiveOutputBudget,
+                            extraSafetyTokens: Math.Max(128 * contextReductionRetry, parsedSafetyTokens > 0 ? parsedSafetyTokens : 0));
+
+                        messages = new List<ConversationMessage>
+                        {
+                            new ConversationMessage { Role = "system", Content = systemMessage },
+                            new ConversationMessage { Role = "user", Content = BuildStoryEvaluatorUserMessage(storyTextForEvaluation) }
+                        };
+
+                        _customLogger?.Append(
+                            $"evaluate_story_{story.Id}_agent_{agentId}",
+                            $"[{story.Id}] Context limit retry {contextReductionRetry}/{maxContextReductionRetries}: nuova lunghezza testo={storyTextForEvaluation.Length}; context_limit={contextLimitTokens}; output_budget={effectiveOutputBudget}; input_stimato={parsedInputTokens}; margine={parsedSafetyTokens}");
+                        continue;
+                    }
+
+                    parseError = failureReason;
+                    break;
+                }
+
+                _customLogger?.MarkLatestModelResponseResult("FAILED", failureReason);
+                return (false, 0, failureReason);
+            }
+
             evalText = NormalizeEvaluatorOutput((evalResult.ResponseText ?? string.Empty));
             messages.Add(new ConversationMessage { Role = "assistant", Content = evalText });
                 if (TryParseEvaluationText(evalText, out parsed, out parseError))
@@ -1639,7 +1752,31 @@ public sealed partial class StoriesService
 
         if (!evalOk)
         {
+            if (hadContextLimitFailure)
+            {
+                var chunked = await EvaluateStoryWithChunkedTextProtocolAsync(
+                    story,
+                    evaluatorAgent,
+                    systemMessage,
+                    callCenter,
+                    contextLimitTokens,
+                    expectedOutputTokens).ConfigureAwait(false);
+
+                if (chunked.success)
+                {
+                    parsed = chunked.parsed;
+                    evalText = chunked.aggregatedText;
+                    evalOk = true;
+                }
+                else
+                {
+                    return (false, 0, chunked.error ?? (parseError ?? "Formato valutazione non valido."));
+                }
+            }
+            else
+            {
             return (false, 0, parseError ?? "Formato valutazione non valido.");
+            }
         }
 
         var totalScore = (double)(parsed.NarrativeScore10 + parsed.OriginalityScore10 + parsed.EmotionalScore10 + parsed.ActionScore10);
@@ -1672,6 +1809,376 @@ public sealed partial class StoriesService
             .FirstOrDefault(e => e.Id == savedEvalId)?.TotalScore ?? totalScore;
 
         return (true, savedScore, null);
+    }
+
+    private int ResolveEvaluatorContextLimitTokens(int? modelId)
+    {
+        const int fallback = 8192;
+        try
+        {
+            if (!modelId.HasValue || modelId.Value <= 0)
+            {
+                return fallback;
+            }
+
+            var model = _database.GetModelInfoById(modelId.Value);
+            if (model == null)
+            {
+                return fallback;
+            }
+
+            var candidates = new[]
+            {
+                model.ContextToUse,
+                model.MaxContextTokens,
+                model.MaxContext
+            };
+
+            var resolved = candidates.FirstOrDefault(v => v > 0);
+            return resolved > 0 ? resolved : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private static string BuildStoryEvaluatorUserMessage(string storyText)
+    {
+        var safeText = string.IsNullOrWhiteSpace(storyText) ? string.Empty : storyText.Trim();
+        return $"TESTO:\n\n{safeText}\n\nVALUTA";
+    }
+
+    private static string BuildEvaluationStoryTextForBudget(
+        string fullStoryText,
+        string systemMessage,
+        int contextLimitTokens,
+        int expectedOutputTokens,
+        int extraSafetyTokens)
+    {
+        var safeStory = fullStoryText ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(safeStory))
+        {
+            return string.Empty;
+        }
+
+        var safeContextLimit = Math.Max(2048, contextLimitTokens);
+        var safeOutputTokens = Math.Max(32, expectedOutputTokens);
+        var systemTokens = EstimateTokenCount(systemMessage);
+        var wrapperTokens = EstimateTokenCount("TESTO:\n\n\n\nVALUTA");
+        var safetyTokens = 384 + Math.Max(0, extraSafetyTokens);
+        var budgetForStoryTokens = safeContextLimit - safeOutputTokens - systemTokens - wrapperTokens - safetyTokens;
+
+        if (budgetForStoryTokens < 256)
+        {
+            budgetForStoryTokens = 256;
+        }
+
+        return TrimTextToApproxTokenBudget(safeStory, budgetForStoryTokens);
+    }
+
+    private static string TrimTextToApproxTokenBudget(string text, int tokenBudget)
+    {
+        var safeText = text ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(safeText))
+        {
+            return string.Empty;
+        }
+
+        var safeBudget = Math.Max(1, tokenBudget);
+        var estimatedTokens = EstimateTokenCount(safeText);
+        if (estimatedTokens <= safeBudget)
+        {
+            return safeText.Trim();
+        }
+
+        var source = safeText.Trim();
+        if (source.Length <= 800)
+        {
+            return source;
+        }
+
+        var targetChars = Math.Max(400, safeBudget * 4);
+        if (targetChars >= source.Length)
+        {
+            return source;
+        }
+
+        var headChars = Math.Max(200, (int)Math.Round(targetChars * 0.65));
+        headChars = Math.Min(headChars, source.Length - 200);
+        var tailChars = Math.Max(200, targetChars - headChars);
+        if (headChars + tailChars > source.Length)
+        {
+            tailChars = Math.Max(200, source.Length - headChars);
+        }
+
+        var head = source[..headChars].TrimEnd();
+        var tail = source[^tailChars..].TrimStart();
+        return $"{head}\n\n[...testo omesso per vincolo contesto...]\n\n{tail}";
+    }
+
+    private static int EstimateTokenCount(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        // Conservative estimate for mixed Italian text + punctuation + instructions.
+        return Math.Max(1, (int)Math.Ceiling(text.Trim().Length / 3.0));
+    }
+
+    private static bool IsProviderContextLimitError(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return false;
+        }
+
+        return reason.Contains("maximum context length", StringComparison.OrdinalIgnoreCase)
+               || reason.Contains("\"param\":\"input_tokens\"", StringComparison.OrdinalIgnoreCase)
+               || reason.Contains("input tokens", StringComparison.OrdinalIgnoreCase)
+               || reason.Contains("prompt troppo lungo per il contesto", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParseProviderContextLimitError(
+        string? reason,
+        out int contextLimitTokens,
+        out int outputTokens,
+        out int inputTokens,
+        out int safetyTokens)
+    {
+        contextLimitTokens = 0;
+        outputTokens = 0;
+        inputTokens = 0;
+        safetyTokens = 0;
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return false;
+        }
+
+        var text = reason!;
+        var ctxMatch = Regex.Match(text, @"maximum\s+context\s+length\s+is\s+(\d+)\s+tokens", RegexOptions.IgnoreCase);
+        var outMatch = Regex.Match(text, @"requested\s+(\d+)\s+output\s+tokens", RegexOptions.IgnoreCase);
+        var inMatch = Regex.Match(text, @"at\s+least\s+(\d+)\s+input\s+tokens", RegexOptions.IgnoreCase);
+        var numCtxMatch = Regex.Match(text, @"num_ctx\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+        var inputStimatoMatch = Regex.Match(text, @"input_stimato\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+        var margineMatch = Regex.Match(text, @"margine_sicurezza\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+
+        if (ctxMatch.Success && int.TryParse(ctxMatch.Groups[1].Value, out var ctx))
+        {
+            contextLimitTokens = ctx;
+        }
+        else if (numCtxMatch.Success && int.TryParse(numCtxMatch.Groups[1].Value, out var ctxVllm))
+        {
+            contextLimitTokens = ctxVllm;
+        }
+
+        if (outMatch.Success && int.TryParse(outMatch.Groups[1].Value, out var output))
+        {
+            outputTokens = output;
+        }
+
+        if (inMatch.Success && int.TryParse(inMatch.Groups[1].Value, out var input))
+        {
+            inputTokens = input;
+        }
+        else if (inputStimatoMatch.Success && int.TryParse(inputStimatoMatch.Groups[1].Value, out var inputVllm))
+        {
+            inputTokens = inputVllm;
+        }
+
+        if (margineMatch.Success && int.TryParse(margineMatch.Groups[1].Value, out var margin))
+        {
+            safetyTokens = margin;
+        }
+
+        return contextLimitTokens > 0 || outputTokens > 0 || inputTokens > 0 || safetyTokens > 0;
+    }
+
+    private async Task<(bool success, ParsedEvaluation parsed, string aggregatedText, string? error)> EvaluateStoryWithChunkedTextProtocolAsync(
+        StoryRecord story,
+        Agent evaluatorAgent,
+        string systemMessage,
+        ICallCenter callCenter,
+        int contextLimitTokens,
+        int expectedOutputTokens)
+    {
+        var fullStoryText = !string.IsNullOrWhiteSpace(story.StoryRevised) ? story.StoryRevised! : (story.StoryRaw ?? string.Empty);
+        var emptyParsed = new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
+        if (string.IsNullOrWhiteSpace(fullStoryText))
+        {
+            return (false, emptyParsed, string.Empty, "Storia vuota");
+        }
+
+        var maxChunkTokens = Math.Max(320, contextLimitTokens - expectedOutputTokens - EstimateTokenCount(systemMessage) - 512);
+        var maxChunkChars = Math.Max(1200, maxChunkTokens * 3);
+        var chunks = SplitTextIntoEvaluationChunks(fullStoryText, maxChunkChars);
+        if (chunks.Count == 0)
+        {
+            return (false, emptyParsed, string.Empty, "Chunking valutazione non ha prodotto segmenti.");
+        }
+
+        var parsedChunks = new List<ParsedEvaluation>(chunks.Count);
+        var runId = $"evaluate_story_{story.Id}_agent_{evaluatorAgent.Id}";
+        _customLogger?.Append(runId, $"[{story.Id}] story_evaluator fallback chunk attivato: chunks={chunks.Count}; max_chunk_chars={maxChunkChars}");
+
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var chunkText = chunks[i];
+            var chunkMessages = new ChatHistory(new[]
+            {
+                new ConversationMessage { Role = "system", Content = systemMessage },
+                new ConversationMessage { Role = "user", Content = BuildStoryEvaluatorUserMessage(chunkText) }
+            });
+
+            var threadId = unchecked((((int)(story.Id % int.MaxValue)) * 541) ^ (7000 + i + 1));
+            var evalResult = await callCenter.CallAgentAsync(
+                storyId: story.Id,
+                threadId: threadId,
+                agent: evaluatorAgent,
+                history: chunkMessages,
+                options: new CallOptions
+                {
+                    Operation = "story_evaluation_chunk",
+                    Timeout = TimeSpan.FromSeconds(120),
+                    MaxRetries = 0,
+                    UseResponseChecker = false,
+                    AllowFallback = true,
+                    AskFailExplanation = true,
+                    SystemPromptOverride = systemMessage
+                }).ConfigureAwait(false);
+
+            if (!evalResult.Success)
+            {
+                return (false, emptyParsed, string.Empty, evalResult.FailureReason ?? $"Valutazione chunk {i + 1}/{chunks.Count} fallita");
+            }
+
+            var normalized = NormalizeEvaluatorOutput(evalResult.ResponseText ?? string.Empty);
+            if (!TryParseEvaluationText(normalized, out var parsedChunk, out var parseError))
+            {
+                return (false, emptyParsed, string.Empty, parseError ?? $"Formato valutazione chunk {i + 1}/{chunks.Count} non valido");
+            }
+
+            parsedChunks.Add(parsedChunk);
+        }
+
+        var aggregated = AggregateChunkEvaluations(parsedChunks);
+        var aggregatedText = BuildEvaluationTextFromParsed(aggregated);
+        return (true, aggregated, aggregatedText, null);
+    }
+
+    private static List<string> SplitTextIntoEvaluationChunks(string text, int maxChunkChars)
+    {
+        var source = (text ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return new List<string>();
+        }
+
+        var maxChars = Math.Max(800, maxChunkChars);
+        if (source.Length <= maxChars)
+        {
+            return new List<string> { source };
+        }
+
+        var paragraphs = Regex.Split(source, @"\r?\n\s*\r?\n")
+            .Select(p => p.Trim())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+
+        if (paragraphs.Count == 0)
+        {
+            return new List<string> { TrimTextToApproxTokenBudget(source, maxChars / 3) };
+        }
+
+        var chunks = new List<string>();
+        var current = new StringBuilder();
+        foreach (var paragraph in paragraphs)
+        {
+            var candidateLength = current.Length == 0
+                ? paragraph.Length
+                : current.Length + Environment.NewLine.Length * 2 + paragraph.Length;
+
+            if (candidateLength > maxChars && current.Length > 0)
+            {
+                chunks.Add(current.ToString().Trim());
+                current.Clear();
+            }
+
+            if (paragraph.Length > maxChars)
+            {
+                var start = 0;
+                while (start < paragraph.Length)
+                {
+                    var len = Math.Min(maxChars, paragraph.Length - start);
+                    var slice = paragraph.Substring(start, len).Trim();
+                    if (!string.IsNullOrWhiteSpace(slice))
+                    {
+                        chunks.Add(slice);
+                    }
+                    start += len;
+                }
+                continue;
+            }
+
+            if (current.Length > 0)
+            {
+                current.AppendLine();
+                current.AppendLine();
+            }
+            current.Append(paragraph);
+        }
+
+        if (current.Length > 0)
+        {
+            chunks.Add(current.ToString().Trim());
+        }
+
+        return chunks.Where(c => !string.IsNullOrWhiteSpace(c)).ToList();
+    }
+
+    private static ParsedEvaluation AggregateChunkEvaluations(IReadOnlyList<ParsedEvaluation> chunks)
+    {
+        if (chunks == null || chunks.Count == 0)
+        {
+            return new ParsedEvaluation(0, string.Empty, 0, string.Empty, 0, string.Empty, 0, string.Empty);
+        }
+
+        int Avg(Func<ParsedEvaluation, int> selector) => (int)Math.Round(chunks.Average(selector));
+        string Merge(Func<ParsedEvaluation, string> selector)
+            => string.Join(" | ", chunks.Select(selector).Where(s => !string.IsNullOrWhiteSpace(s)).Take(4));
+
+        return new ParsedEvaluation(
+            Math.Clamp(Avg(c => c.NarrativeScore10), 0, 10),
+            Merge(c => c.NarrativeExplanation),
+            Math.Clamp(Avg(c => c.OriginalityScore10), 0, 10),
+            Merge(c => c.OriginalityExplanation),
+            Math.Clamp(Avg(c => c.EmotionalScore10), 0, 10),
+            Merge(c => c.EmotionalExplanation),
+            Math.Clamp(Avg(c => c.ActionScore10), 0, 10),
+            Merge(c => c.ActionExplanation));
+    }
+
+    private static string BuildEvaluationTextFromParsed(ParsedEvaluation parsed)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Coerenza narrativa");
+        sb.AppendLine($"Punteggio: {parsed.NarrativeScore10}/10");
+        sb.AppendLine($"Motivazione: {parsed.NarrativeExplanation}");
+        sb.AppendLine();
+        sb.AppendLine("Originalità");
+        sb.AppendLine($"Punteggio: {parsed.OriginalityScore10}/10");
+        sb.AppendLine($"Motivazione: {parsed.OriginalityExplanation}");
+        sb.AppendLine();
+        sb.AppendLine("Impatto emotivo");
+        sb.AppendLine($"Punteggio: {parsed.EmotionalScore10}/10");
+        sb.AppendLine($"Motivazione: {parsed.EmotionalExplanation}");
+        sb.AppendLine();
+        sb.AppendLine("Azione");
+        sb.AppendLine($"Punteggio: {parsed.ActionScore10}/10");
+        sb.AppendLine($"Motivazione: {parsed.ActionExplanation}");
+        return sb.ToString().Trim();
     }
 
     private void TryEnqueueAutoFormatAfterEvaluation(long storyId)

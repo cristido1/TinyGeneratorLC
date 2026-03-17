@@ -9,7 +9,32 @@
       "Bash(dotnet ef migrations:*)",
       "Bash(ls:*)",
       "Bash(cmd /c \"taskkill /PID 14480 /F\")",
-      "Bash(dotnet run:*)"
+      "Bash(dotnet run:*)",
+      "Bash(cmd /c \"c:\\\\Users\\\\User\\\\Documents\\\\ai\\\\TinyGeneratorLC\\\\vllm_start.bat\")",
+      "Bash(docker ps:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker run:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" -e VLLM_SERVER_DEV_MODE=1 \"vllm/vllm-openai:nightly\" \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"QuantTrio/Qwen3.5-9B-AWQ\" --gpu-memory-utilization 0.95 --max-model-len 4096 --max-num-seqs 1 --max-num-batched-tokens 2048 --tensor-parallel-size 1 --cpu-offload-gb 0 --trust-remote-code --enable-sleep-mode --no-enable-log-requests)",
+      "WebSearch",
+      "Bash(huggingface-cli --version)",
+      "Bash(python -c \"import huggingface_hub; print\\(huggingface_hub.__version__\\)\")",
+      "Bash(pip install:*)",
+      "Bash(where huggingface-cli:*)",
+      "Bash(python -m huggingface_hub.cli --version)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"QuantTrio/Qwen3.5-9B-AWQ\" --gpu-memory-utilization 0.90 --max-model-len 4096 --max-num-seqs 1 --max-num-batched-tokens 2048 --tensor-parallel-size 1 --trust-remote-code --enforce-eager --no-enable-log-requests)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ\" --host 0.0.0.0 --port 8000 --served-model-name \"QuantTrio/Qwen3.5-9B-AWQ\" --gpu-memory-utilization 0.90 --max-model-len 4096 --max-num-seqs 1 --max-num-batched-tokens 2048 --tensor-parallel-size 1 --trust-remote-code --no-enable-log-requests)",
+      "Bash(curl -s http://localhost:8000/v1/chat/completions -H \"Content-Type: application/json\" -d '{:*)",
+      "Bash(curl -s http://localhost:8000/v1/chat/completions -H \"Content-Type: application/json\" -d \"{\"\"model\"\":\"\"QuantTrio/Qwen3.5-9B-AWQ\"\",\"\"messages\"\":[{\"\"role\"\":\"\"user\"\",\"\"content\"\":\"\"Cos''e'' vLLM? Rispondi in italiano in una frase.\"\"}],\"\"max_tokens\"\":100}\")",
+      "Bash(until docker:*)",
+      "Bash(do sleep:*)",
+      "Bash(done)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ\" --tokenizer \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"Vishva007/Qwen3.5-9B-GPTQ\" --gpu-memory-utilization 0.90 --max-model-len 4096 --max-num-seqs 4 --max-num-batched-tokens 4096 --tensor-parallel-size 1 --trust-remote-code --no-enable-log-requests)",
+      "Bash(curl -s http://localhost:8000/v1/chat/completions -H \"Content-Type: application/json\" -d \"{\"\"model\"\":\"\"Vishva007/Qwen3.5-9B-GPTQ\"\",\"\"messages\"\":[{\"\"role\"\":\"\"user\"\",\"\"content\"\":\"\"Ciao!\"\"}],\"\"max_tokens\"\":30,\"\"chat_template_kwargs\"\":{\"\"enable_thinking\"\":false}}\")",
+      "Bash(python -c \"import sys,json; print\\(json.load\\(sys.stdin\\)[''''choices''''][0][''''message''''][''''content'''']\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d[''''choices''''][0][''''message''''][''''content'''']\\)\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ\" --tokenizer \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"Vishva007/Qwen3.5-9B-GPTQ\" --gpu-memory-utilization 0.90 --max-model-len 8192 --max-num-seqs 4 --max-num-batched-tokens 4096 --tensor-parallel-size 1 --trust-remote-code --no-enable-log-requests)",
+      "Bash(grep -v \"//.*duplicate\")",
+      "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ\" --tokenizer \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"Vishva007/Qwen3.5-9B-GPTQ\" --gpu-memory-utilization 0.90 --max-model-len 16384 --max-num-seqs 4 --max-num-batched-tokens 4096 --tensor-parallel-size 1 --trust-remote-code --no-enable-log-requests)"
     ]
   }
 }

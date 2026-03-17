@@ -140,6 +140,12 @@ namespace TinyGenerator.Services
                     RawLogRef = ctx.RawLogRef
                 };
 
+                if (ShouldSkipReportInsertion(ctx, report))
+                {
+                    _logger?.Log("Info", "SystemReport", $"System report skipped by filter: {report.Title}");
+                    return;
+                }
+
                 if (IsDuplicateRecentReport(report))
                 {
                     _logger?.Log("Info", "SystemReport", $"Duplicate system report skipped: {report.Title}");
@@ -152,6 +158,48 @@ namespace TinyGenerator.Services
             {
                 _logger?.Log("Error", "SystemReport", $"Failed to write system report: {ex.Message}", ex.ToString());
             }
+        }
+
+        private static bool ShouldSkipReportInsertion(FailureContext ctx, SystemReport report)
+        {
+            var opName = (ctx.OperationName ?? string.Empty).Trim();
+            var opType = (ctx.OperationType ?? string.Empty).Trim();
+            var message = report.Message ?? string.Empty;
+            var failureReason = report.FailureReason ?? string.Empty;
+            var combined = (message + "\n" + failureReason).ToLowerInvariant();
+
+            var isAutoNre = opName.Equals("auto_nre_story_generation", StringComparison.OrdinalIgnoreCase)
+                            || opType.Equals("auto_nre_story_generation", StringComparison.OrdinalIgnoreCase);
+            if (!isAutoNre)
+            {
+                return false;
+            }
+
+            // Non-actionable functional reject: piano sotto soglia senza errore tecnico.
+            var isPlanEvaluatorScoreReject =
+                combined.Contains("piano nre bocciato da nre_plan_evaluator")
+                && combined.Contains("score=")
+                && combined.Contains("min=")
+                && (combined.Contains("needs_retry=false") || combined.Contains("needs_retry=false."))
+                && (combined.Contains("issues: nessun dettaglio") || combined.Contains("issues: no details"));
+
+            if (!isPlanEvaluatorScoreReject)
+            {
+                return false;
+            }
+
+            // Se ci sono indicatori tecnici reali, NON filtrare.
+            var hasTechnicalFailureSignals =
+                combined.Contains("http ") ||
+                combined.Contains("timeout") ||
+                combined.Contains("exception") ||
+                combined.Contains("json") ||
+                combined.Contains("schema") ||
+                combined.Contains("prompt troppo lungo") ||
+                combined.Contains("max_model_len") ||
+                combined.Contains("input_tokens");
+
+            return !hasTechnicalFailureSignals;
         }
 
         private bool IsDuplicateRecentReport(SystemReport candidate)

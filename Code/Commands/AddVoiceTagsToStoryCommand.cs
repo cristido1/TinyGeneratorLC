@@ -196,7 +196,9 @@ namespace TinyGenerator.Services.Commands
 
                         if (!callResult.Success)
                         {
-                            return Fail(effectiveRunId, callResult.FailureReason ?? "Formatter call failed");
+                            var failureReason = callResult.FailureReason ?? "Formatter call failed";
+                            MarkFailedFormatterResponse(formatterAgent, failureReason);
+                            return Fail(effectiveRunId, failureReason);
                         }
 
                         if (!string.IsNullOrWhiteSpace(callResult.ModelUsed))
@@ -208,6 +210,7 @@ namespace TinyGenerator.Services.Commands
                         var normalizedMapping = NormalizeVoiceMapping(mappingText, quoteLineIds, out var errorMessage);
                         if (!string.IsNullOrWhiteSpace(errorMessage))
                         {
+                            MarkFailedFormatterResponse(formatterAgent, errorMessage);
                             return Fail(effectiveRunId, errorMessage);
                         }
 
@@ -474,6 +477,22 @@ namespace TinyGenerator.Services.Commands
             _logger?.Append(runId, message, "error");
             _logger?.MarkCompleted(runId, "failed");
             return new CommandResult(false, message);
+        }
+
+        private void MarkFailedFormatterResponse(Agent formatterAgent, string? failureReason)
+        {
+            if (_logger is CustomLogger concreteLogger &&
+                !string.IsNullOrWhiteSpace(formatterAgent?.Description))
+            {
+                concreteLogger.MarkLatestModelResponseResultForAgent(
+                    formatterAgent.Description,
+                    "FAILED",
+                    failureReason,
+                    examined: true);
+                return;
+            }
+
+            _logger?.MarkLatestModelResponseResult("FAILED", failureReason, examined: true);
         }
 
         private void ReportProgress(string runId, int current, int max, string description)

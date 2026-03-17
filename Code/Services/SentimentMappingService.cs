@@ -1,5 +1,6 @@
 using System.Text.Json;
 using TinyGenerator.Models;
+using TinyGenerator.Configuration;
 
 namespace TinyGenerator.Services;
 
@@ -125,8 +126,8 @@ public class SentimentMappingService
             // Calcola e salva gli embedding
             _logger?.Log("Info", "SentimentMapping", "Calcolo embedding sentimenti destinazione...");
 
-            var embeddingModel = _configuration["Ollama:EmbeddingModel"] ?? "nomic-embed-text:latest";
-            var ollamaEndpoint = _configuration["Ollama:Endpoint"] ?? "http://localhost:11434";
+            var embeddingModel = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:EmbeddingModel");
+            var ollamaEndpoint = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:Endpoint");
 
             foreach (var sentiment in SupportedSentiments)
             {
@@ -286,8 +287,8 @@ public class SentimentMappingService
             if (_destEmbeddingsCache == null || _destEmbeddingsCache.Count == 0)
                 return (null, 0);
 
-            var embeddingModel = _configuration["Ollama:EmbeddingModel"] ?? "nomic-embed-text:latest";
-            var ollamaEndpoint = _configuration["Ollama:Endpoint"] ?? "http://localhost:11434";
+            var embeddingModel = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:EmbeddingModel");
+            var ollamaEndpoint = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:Endpoint");
 
             var sourceEmbedding = await GetEmbeddingFromOllamaAsync(
                 sourceSentiment, embeddingModel, ollamaEndpoint, ct);
@@ -333,7 +334,7 @@ public class SentimentMappingService
                 modelName = "gemma2:2b"; // fallback
             }
 
-            var ollamaEndpoint = _configuration["Ollama:Endpoint"] ?? "http://localhost:11434";
+            var ollamaEndpoint = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:Endpoint");
 
             var prompt = agent?.Prompt?.Replace("{{sentiment}}", sourceSentiment)
                 ?? $@"Mappa il sentimento '{sourceSentiment}' a UNO solo di questi valori:

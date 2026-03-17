@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -98,6 +99,12 @@ namespace TinyGenerator.Services.Commands
             {
                 var resolvedAgent = _agentResolutionService.Resolve(CommandRoleCodes.MusicExpert);
                 var currentModelName = resolvedAgent.ModelName;
+                var (minTokensPerChunk, maxTokensPerChunk, targetTokensPerChunk, chunkTuningNote) =
+                    ResolveMusicChunkSizingForModel(resolvedAgent.ModelId, resolvedAgent.ModelName);
+                if (!string.IsNullOrWhiteSpace(chunkTuningNote))
+                {
+                    telemetry.Append(effectiveRunId, $"[story {_storyId}] {chunkTuningNote}");
+                }
 
                 var systemPrompt = TaggingResponseFormat.AppendToSystemPrompt(
                     resolvedAgent.BaseSystemPrompt,
@@ -105,9 +112,9 @@ namespace TinyGenerator.Services.Commands
 
                 var preparation = _storyTaggingPipelineService.PrepareTagging(
                     _storyId,
-                    _tuning.MusicExpert.MinTokensPerChunk,
-                    _tuning.MusicExpert.MaxTokensPerChunk,
-                    _tuning.MusicExpert.TargetTokensPerChunk);
+                    minTokensPerChunk,
+                    maxTokensPerChunk,
+                    targetTokensPerChunk);
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
                 telemetry.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
@@ -285,6 +292,40 @@ namespace TinyGenerator.Services.Commands
             {
                 return ((int)(storyId % int.MaxValue) * 991) ^ chunkIndex;
             }
+        }
+
+        private (int minTokens, int maxTokens, int targetTokens, string? note) ResolveMusicChunkSizingForModel(int modelId, string? modelName)
+        {
+            var minCfg = Math.Max(1, _tuning.MusicExpert.MinTokensPerChunk);
+            var maxCfg = Math.Max(minCfg, _tuning.MusicExpert.MaxTokensPerChunk);
+            var targetCfg = Math.Clamp(_tuning.MusicExpert.TargetTokensPerChunk, minCfg, maxCfg);
+
+            var db = ServiceLocator.Services?.GetService(typeof(DatabaseService)) as DatabaseService;
+            if (db == null)
+            {
+                return (minCfg, maxCfg, targetCfg, null);
+            }
+
+            var model = db.GetModelInfoById(modelId)
+                ?? db.ListModels().FirstOrDefault(m =>
+                    string.Equals(m.Name, modelName, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(m.CallName, modelName, StringComparison.OrdinalIgnoreCase));
+
+            if (model == null || !string.Equals(model.Provider, "vllm", StringComparison.OrdinalIgnoreCase))
+            {
+                return (minCfg, maxCfg, targetCfg, null);
+            }
+
+            var modelCtx = Math.Max(1024, model.ContextToUse > 0 ? model.ContextToUse : model.MaxContext);
+            // Con vLLM 4k + JSON schema + instruction lunghe, chunk troppo grandi saturano il contesto.
+            // Riduciamo in modo conservativo il testo variabile (rows chunk).
+            var safeMaxByCtx = Math.Max(420, (int)Math.Floor(modelCtx * 0.22));
+            var maxAdaptive = Math.Min(maxCfg, safeMaxByCtx);
+            var minAdaptive = Math.Min(minCfg, Math.Max(180, maxAdaptive / 2));
+            var targetAdaptive = Math.Clamp(Math.Min(targetCfg, (int)Math.Floor(maxAdaptive * 0.82)), minAdaptive, maxAdaptive);
+
+            var note = $"vLLM adaptive chunk sizing attivo per music_expert: min={minAdaptive}, target={targetAdaptive}, max={maxAdaptive} (ctx={modelCtx}).";
+            return (minAdaptive, maxAdaptive, targetAdaptive, note);
         }
     }
 }

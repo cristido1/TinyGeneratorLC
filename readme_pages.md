@@ -24,7 +24,7 @@ Questa lista è ricavata dalla struttura in `Pages/`.
 - `/LangChainTest`: runner test.
 - `/TestDefinitions/*`: definizioni test.
 - `/ModelStats/Index`: statistiche modelli.
-- `/OllamaMonitor`: monitor.
+- `/ExternalServicesMonitor`: monitor dei servizi esterni.
 
 ## Config e logging
 - `/Settings/Index`: viewer/edit configurazioni (UI).

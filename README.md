@@ -16,6 +16,11 @@ Policy output LLM (runtime):
 - CommandDispatcher + comandi: `readme_command_dispatcher.md`
 - UI Razor Pages (pagine): `readme_pages.md`
 
+## Database In Uso
+
+- Database applicativo corrente: `data/storage.db`
+- Nota: usare questo file come riferimento operativo (non `TinyG.sqlite` in root).
+
 ## Requisiti
 
 - .NET SDK (vedi `TinyGenerator.csproj`)

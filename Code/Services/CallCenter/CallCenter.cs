@@ -146,9 +146,9 @@ public sealed class CallCenter : ICallCenter
             var systemPromptForCurrentCall = ResolveSystemPromptForCurrentAgent(
                 currentAgent,
                 roleCode,
-                options.SystemPromptOverride,
                 systemPromptByModel);
             UpsertConversationSystemMessage(updatedHistory, systemPromptForCurrentCall);
+            UpsertRequestContextUserMessage(updatedHistory, options.SystemPromptOverride);
 
             string? previousNormalizedResponse = null;
             var (resolvedResponseFormat, jsonFormatCheck) = ResolveResponseFormatArtifacts(currentAgent);
@@ -222,6 +222,7 @@ public sealed class CallCenter : ICallCenter
                 if (failedChecker != null)
                 {
                     lastFailure = failedChecker.FailureReason ?? $"agent_checker_failed:{failedChecker.CheckerAgentName}";
+                    MarkCheckedRequestFailure(currentAgent, lastFailure);
                     AppendFailureForRetry(updatedHistory, lastFailure);
                     _logger?.Log(
                         "Warning",
@@ -229,6 +230,20 @@ public sealed class CallCenter : ICallCenter
                         $"operation={operationName}; status=FAILED; story_id={storyId}; thread_id={threadId}; reason={lastFailure}; phase=agent_checker",
                         state: "agent_checker",
                         result: "FAILED");
+
+                    if (IsNonRetriableVllmPromptContextError(lastFailure))
+                    {
+                        return new CallCenterResult
+                        {
+                            Success = false,
+                            UpdatedHistory = updatedHistory,
+                            Attempts = attemptsTotal,
+                            ModelUsed = NormalizeModelName(result.ModelName, modelName),
+                            Duration = stopwatch.Elapsed,
+                            FailureReason = lastFailure,
+                            CheckerOutcomes = checkerOutcomes
+                        };
+                    }
 
                     var retryDecisionAfterChecker = _retryPolicy.Evaluate(new RetryContext
                     {
@@ -322,6 +337,19 @@ public sealed class CallCenter : ICallCenter
                 $"operation={operationName}; status=FAILED; story_id={storyId}; thread_id={threadId}; agent={currentAgent.Name}; model={NormalizeModelName(result.ModelName, modelName)}; reason={lastFailure}; attempts_total={attemptsTotal}; attempts_agent={attemptsCurrentAgent}",
                 state: result.DeterministicFailure ? "deterministic_validation" : "agent_call",
                 result: "FAILED");
+
+            if (IsNonRetriableVllmPromptContextError(lastFailure))
+            {
+                return new CallCenterResult
+                {
+                    Success = false,
+                    UpdatedHistory = updatedHistory,
+                    Attempts = attemptsTotal,
+                    ModelUsed = NormalizeModelName(result.ModelName, modelName),
+                    Duration = stopwatch.Elapsed,
+                    FailureReason = lastFailure
+                };
+            }
 
             // Retry with the same agent first, preserving full conversation history.
             var retryDecision = _retryPolicy.Evaluate(new RetryContext
@@ -476,14 +504,8 @@ public sealed class CallCenter : ICallCenter
     private string ResolveSystemPromptForCurrentAgent(
         Agent agent,
         string roleCode,
-        string? overrideSystemPrompt,
         Dictionary<string, string> systemPromptByModel)
     {
-        if (!string.IsNullOrWhiteSpace(overrideSystemPrompt))
-        {
-            return overrideSystemPrompt!;
-        }
-
         var cacheKey = BuildSystemPromptCacheKey(agent, roleCode);
         if (systemPromptByModel.TryGetValue(cacheKey, out var cached) && !string.IsNullOrWhiteSpace(cached))
         {
@@ -701,6 +723,11 @@ public sealed class CallCenter : ICallCenter
         }
 
         var fixedModelId = _database.GetModelIdByName(fixedModelDescription);
+        var fixedModel = fixedModelId.HasValue && fixedModelId.Value > 0
+            ? _database.GetModelInfoById(fixedModelId.Value)
+            : _database.ListModels().FirstOrDefault(m =>
+                string.Equals(m.Name, fixedModelDescription, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(m.CallName, fixedModelDescription, StringComparison.OrdinalIgnoreCase));
         var currentMatchesFixed = false;
         if (fixedModelId.HasValue && fixedModelId.Value > 0 &&
             currentModelId.HasValue && currentModelId.Value > 0)
@@ -728,6 +755,14 @@ public sealed class CallCenter : ICallCenter
         }
 
         overridden.ModelName = fixedModelDescription;
+        if (mono.DisableThinking)
+        {
+            overridden.Thinking = false;
+        }
+        else if (fixedModel?.Thinking.HasValue == true)
+        {
+            overridden.Thinking = fixedModel.Thinking.Value;
+        }
         _logger?.Log(
             "Information",
             "CallCenter",
@@ -794,6 +829,35 @@ public sealed class CallCenter : ICallCenter
         });
     }
 
+    private static void UpsertRequestContextUserMessage(ChatHistory history, string? requestContext)
+    {
+        if (history == null || string.IsNullOrWhiteSpace(requestContext))
+        {
+            return;
+        }
+
+        const string prefix = "[CALLCENTER_REQUEST_CONTEXT]";
+        var payload = $"{prefix} {requestContext.Trim()}";
+
+        history.Messages.RemoveAll(m =>
+            string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(m.Content) &&
+            m.Content.TrimStart().StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+        var insertIndex = 0;
+        if (history.Messages.Count > 0 &&
+            string.Equals(history.Messages[0].Role, "system", StringComparison.OrdinalIgnoreCase))
+        {
+            insertIndex = 1;
+        }
+
+        history.Messages.Insert(insertIndex, new ConversationMessage
+        {
+            Role = "user",
+            Content = payload
+        });
+    }
+
     private static string NormalizeForComparison(string? text)
     {
         return (text ?? string.Empty).Trim();
@@ -808,6 +872,22 @@ public sealed class CallCenter : ICallCenter
             : check.GenericErrorDescription;
         var message = string.IsNullOrWhiteSpace(result.Message) ? "failed" : result.Message;
         return $"{className}: {rule} | GENERIC_ERROR: {generic} | DETAIL: {message}";
+    }
+
+    private void MarkCheckedRequestFailure(Agent checkedAgent, string? failureReason)
+    {
+        var reason = string.IsNullOrWhiteSpace(failureReason) ? "validation_failed" : failureReason.Trim();
+        if (_logger is CustomLogger concreteLogger && !string.IsNullOrWhiteSpace(checkedAgent?.Description))
+        {
+            concreteLogger.MarkLatestModelResponseResultForAgent(
+                checkedAgent.Description!,
+                "FAILED",
+                reason,
+                examined: true);
+            return;
+        }
+
+        _logger?.MarkLatestModelResponseResult("FAILED", reason, examined: true);
     }
 
     private async Task<List<AgentCheckerOutcome>> RunAgentCheckersAsync(
@@ -848,8 +928,12 @@ public sealed class CallCenter : ICallCenter
                     Timeout = options.Timeout,
                     // Nested CallCenter handles single attempt; retry loop is managed here to preserve conversation.
                     MaxRetries = 0,
-                    UseResponseChecker = true,
-                    AskFailExplanation = true,
+                    // IMPORTANT:
+                    // The checker agent validates the primary response. Running response_checker again
+                    // on the checker output can mis-attribute failures to the checker log row itself.
+                    // Keep this disabled here so checker failures are propagated to the primary call.
+                    UseResponseChecker = false,
+                    AskFailExplanation = false,
                     AllowFallback = true
                 };
 
@@ -1051,6 +1135,19 @@ public sealed class CallCenter : ICallCenter
         }
 
         return value.Trim();
+    }
+
+    private static bool IsNonRetriableVllmPromptContextError(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("vLLM prompt troppo lungo per il contesto disponibile", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("maximum context length", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("\"param\":\"input_tokens\"", StringComparison.OrdinalIgnoreCase)
+               || value.Contains("max_model_len", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ShouldUseStoryLiveStreaming(string? roleCode)

@@ -93,7 +93,8 @@ namespace TinyGenerator.Pages.Models
             // Business rule: if provider is local then IsLocal = true
             if (!string.IsNullOrWhiteSpace(existing.Provider) &&
                 (existing.Provider.Equals("ollama", System.StringComparison.OrdinalIgnoreCase) ||
-                 existing.Provider.Equals("llama.cpp", System.StringComparison.OrdinalIgnoreCase)))
+                 existing.Provider.Equals("llama.cpp", System.StringComparison.OrdinalIgnoreCase) ||
+                 existing.Provider.Equals("vllm", System.StringComparison.OrdinalIgnoreCase)))
             {
                 existing.IsLocal = true;
             }

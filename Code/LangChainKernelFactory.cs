@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using TinyGenerator.Configuration;
 using TinyGenerator.Models;
 using TinyGenerator.Skills;
 
@@ -295,12 +296,13 @@ namespace TinyGenerator.Services
                 string endpoint;
                 string apiKey = "ollama"; // Default for Ollama (no auth required)
                 bool? forceOllama = null;
+                var isVllm = false;
                 Func<CancellationToken, Task>? beforeCall = null;
                 Func<CancellationToken, Task>? afterCall = null;
 
                 if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    endpoint = _config.GetSection("Ollama:endpoint").Value ?? "http://localhost:11434";
+                    endpoint = ExternalServerConfig.GetRequiredValue(_config, "Ollama:Endpoint");
                     forceOllama = true;
                 }
                 else if (modelInfo.Provider?.Equals("llama.cpp", StringComparison.OrdinalIgnoreCase) == true)
@@ -320,7 +322,7 @@ namespace TinyGenerator.Services
                         {
                             try
                             {
-                                await _llamaService.EnsureRestartAsync(modelName, ctxSize).ConfigureAwait(false);
+                                await _llamaService.EnsureServerAsync(modelName, ctxSize).ConfigureAwait(false);
                                 _logger?.Log("Info", "llama.cpp", "llama.cpp beforeCall: start complete");
                             }
                             catch (Exception ex)
@@ -349,9 +351,18 @@ namespace TinyGenerator.Services
                         ?? Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY") 
                         ?? "key-";
                 }
+                else if (modelInfo.Provider?.Equals("vllm", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    endpoint = modelInfo.Endpoint ?? ExternalServerConfig.GetRequiredValue(_config, "vLLM:Endpoint");
+                    apiKey = _config.GetSection("Secrets:vLLM:ApiKey").Value
+                        ?? Environment.GetEnvironmentVariable("VLLM_API_KEY")
+                        ?? "EMPTY";
+                    forceOllama = false;
+                    isVllm = true;
+                }
                 else
                 {
-                    endpoint = modelInfo.Endpoint ?? _config.GetSection("Ollama:endpoint").Value ?? "http://localhost:11434";
+                    endpoint = modelInfo.Endpoint ?? ExternalServerConfig.GetRequiredValue(_config, "Ollama:Endpoint");
                 }
 
                 _logger?.Log("Info", "LangChainKernelFactory",
@@ -367,7 +378,7 @@ namespace TinyGenerator.Services
                 var noTopKModels = _config.GetSection("OpenAI:NoTopKModels").Get<string[]>() ?? Array.Empty<string>();
                 var noRepeatLastNModels = _config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
                 var noNumPredictModels = _config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
-                var bridge = new LangChainChatBridge(endpoint, resolvedModelId, apiKey, null, _logger, forceOllama, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels, _services);
+                var bridge = new LangChainChatBridge(endpoint, resolvedModelId, apiKey, null, _logger, forceOllama, isVllm, beforeCall, afterCall, logAsLlama, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels, _services);
                 if (temperature.HasValue) bridge.Temperature = temperature.Value;
                 if (topP.HasValue) bridge.TopP = topP.Value;
                 if (repeatPenalty.HasValue) bridge.RepeatPenalty = repeatPenalty.Value;
@@ -382,6 +393,12 @@ namespace TinyGenerator.Services
                 else if (modelInfo.Provider?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true && modelInfo.ContextToUse > 0)
                 {
                     bridge.NumCtx = modelInfo.ContextToUse;
+                }
+                else if (isVllm)
+                {
+                    var vllmMaxModelLen = _config.GetValue<int?>("VllmServer:MaxModelLen");
+                    if (vllmMaxModelLen is > 0)
+                        bridge.NumCtx = vllmMaxModelLen.Value;
                 }
 
                 if (!bridge.NumPredict.HasValue)
@@ -434,6 +451,7 @@ namespace TinyGenerator.Services
 
             // OpenAI/Azure are external providers: do not manage local memory.
             if (provider.Equals("openai", StringComparison.OrdinalIgnoreCase) ||
+                provider.Equals("vllm", StringComparison.OrdinalIgnoreCase) ||
                 provider.Equals("azure", StringComparison.OrdinalIgnoreCase))
             {
                 return;

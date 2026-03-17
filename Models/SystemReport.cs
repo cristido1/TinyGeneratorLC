@@ -5,7 +5,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace TinyGenerator.Models
 {
     [Table("system_reports")]
-    public partial class SystemReport : ISoftDelete, IActiveFlag, IOrderable, IEntity
+    public partial class SystemReport : IActiveFlag, IOrderable, IEntity
     {
         [Key]
         [Column("id")]

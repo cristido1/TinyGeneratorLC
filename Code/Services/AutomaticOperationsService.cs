@@ -30,6 +30,7 @@ namespace TinyGenerator.Services
         };
 
         private readonly ICommandDispatcher _dispatcher;
+        private readonly CommandDispatcher? _commandDispatcher;
         private readonly StoriesService _stories;
         private readonly DatabaseService _database;
         private readonly IOptionsMonitor<AutomaticOperationsOptions> _optionsMonitor;
@@ -55,6 +56,7 @@ namespace TinyGenerator.Services
 
         public AutomaticOperationsService(
             ICommandDispatcher dispatcher,
+            CommandDispatcher? commandDispatcher,
             StoriesService stories,
             DatabaseService database,
             IOptionsMonitor<AutomaticOperationsOptions> optionsMonitor,
@@ -68,6 +70,7 @@ namespace TinyGenerator.Services
             ILogger<AutomaticOperationsService> logger)
         {
             _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+            _commandDispatcher = commandDispatcher;
             _stories = stories ?? throw new ArgumentNullException(nameof(stories));
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _optionsMonitor = optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
@@ -113,14 +116,9 @@ namespace TinyGenerator.Services
                         continue;
                     }
 
-                    if (HasAnyActiveCommands())
-                    {
-                        _lastActivityUtc = DateTime.UtcNow;
-                        _idleAttempted = false;
-                        continue;
-                    }
+                    var allowWorkWhileBusy = await CanScheduleAdditionalWorkWhileBusyAsync(stoppingToken).ConfigureAwait(false);
 
-                    if (HasActiveNonIgnoredCommands())
+                    if (HasActiveNonIgnoredCommands() && !allowWorkWhileBusy)
                     {
                         _lastActivityUtc = DateTime.UtcNow;
                         _idleAttempted = false;
@@ -229,107 +227,353 @@ namespace TinyGenerator.Services
 
         private void TryRunSelectedAutoAdvancement(AutomaticOperationsOptions opts)
         {
+            var burst = Math.Max(1, opts.AutoAdvancementBurstPerPoll);
             var mode = NormalizeAutoAdvancementMode(opts.AutoAdvancementMode);
             if (mode == "nre")
             {
-                TryRunAutoNreStoryGeneration(opts, useManualMethod: false);
+                for (var i = 0; i < burst; i++)
+                {
+                    if (!TryRunAutoNreStoryGeneration(opts, useManualMethod: false))
+                    {
+                        break;
+                    }
+                }
                 return;
             }
 
             if (mode == "nre_manual")
             {
-                TryRunAutoNreStoryGeneration(opts, useManualMethod: true);
+                for (var i = 0; i < burst; i++)
+                {
+                    if (!TryRunAutoNreStoryGeneration(opts, useManualMethod: true))
+                    {
+                        break;
+                    }
+                }
                 return;
             }
 
-            TryRunAutoStateDrivenSeriesEpisode(opts);
+            for (var i = 0; i < burst; i++)
+            {
+                if (!TryRunAutoStateDrivenSeriesEpisode(opts))
+                {
+                    break;
+                }
+            }
         }
 
-        private void TryRunAutoStateDrivenSeriesEpisode(AutomaticOperationsOptions opts)
+        private bool TryRunAutoStateDrivenSeriesEpisode(AutomaticOperationsOptions opts)
         {
             try
             {
                 var auto = opts.AutoStateDrivenSeriesEpisode;
                 if (auto == null || !auto.Enabled)
                 {
-                    return;
+                    return false;
+                }
+
+                var targetQueued = Math.Max(1, auto.TargetQueuedCommands);
+                var currentQueued = CountQueuedOperations("StateDrivenEpisodeAuto", "state_driven_series_episode_auto");
+                if (currentQueued >= targetQueued)
+                {
+                    return false;
                 }
 
                 var interval = TimeSpan.FromMinutes(Math.Max(1, auto.IntervalMinutes));
                 var nowUtc = DateTime.UtcNow;
-                if (nowUtc - _lastAutoSeriesEpisodeAttemptUtc < interval)
+                if (currentQueued <= 0 && nowUtc - _lastAutoSeriesEpisodeAttemptUtc < interval)
                 {
-                    return;
+                    return false;
                 }
 
                 if (HasPendingStoryAutomationBacklog(opts))
                 {
-                    return;
+                    return false;
                 }
 
-                if (IsOperationQueued("StateDrivenEpisodeAuto"))
-                {
-                    _lastAutoSeriesEpisodeAttemptUtc = nowUtc;
-                    return;
-                }
-
-                TryEnqueueAutoStateDrivenSeriesEpisode(auto);
+                var enqueued = TryEnqueueAutoStateDrivenSeriesEpisode(auto);
                 _lastAutoSeriesEpisodeAttemptUtc = nowUtc;
+                return enqueued;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Auto state-driven episode check failed inside AutomaticOperationsService");
+                return false;
             }
         }
 
-        private void TryRunAutoNreStoryGeneration(AutomaticOperationsOptions opts, bool useManualMethod)
+        private bool TryRunAutoNreStoryGeneration(AutomaticOperationsOptions opts, bool useManualMethod)
         {
             try
             {
                 var auto = opts.AutoNreStoryGeneration;
                 if (auto == null || !auto.Enabled)
                 {
-                    return;
+                    return false;
+                }
+
+                if (TryEnqueueRerunFromSavedPlanForInsertedStory())
+                {
+                    return true;
+                }
+
+                var targetQueued = Math.Max(1, auto.TargetQueuedCommands);
+                var currentQueued = CountQueuedOperations("AutoNreStoryGeneration", "auto_nre_story_generation", "run_nre");
+                if (currentQueued >= targetQueued)
+                {
+                    return false;
                 }
 
                 var interval = TimeSpan.FromMinutes(Math.Max(1, auto.IntervalMinutes));
                 var nowUtc = DateTime.UtcNow;
-                if (nowUtc - _lastAutoNreStoryAttemptUtc < interval)
+                if (currentQueued <= 0 && nowUtc - _lastAutoNreStoryAttemptUtc < interval)
                 {
-                    return;
+                    return false;
                 }
 
                 if (HasPendingStoryAutomationBacklog(opts))
                 {
-                    return;
+                    return false;
                 }
 
-                if (IsOperationQueued("AutoNreStoryGeneration") || IsOperationQueued("run_nre"))
-                {
-                    _lastAutoNreStoryAttemptUtc = nowUtc;
-                    return;
-                }
-
-                TryEnqueueAutoNreStoryGeneration(auto, useManualMethod);
+                var enqueued = TryEnqueueAutoNreStoryGeneration(auto, useManualMethod);
                 _lastAutoNreStoryAttemptUtc = nowUtc;
+                return enqueued;
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Auto NRE story generation check failed inside AutomaticOperationsService");
+                return false;
             }
+        }
+
+        private bool TryEnqueueRerunFromSavedPlanForInsertedStory()
+        {
+            try
+            {
+                if (!TryGetInsertedStoryWithSavedPlanAndNoActiveCommands(out var sourceStory))
+                {
+                    return false;
+                }
+
+                if (sourceStory == null || sourceStory.Id <= 0)
+                {
+                    return false;
+                }
+
+                var savedPlan = sourceStory.NrePlanSummary?.Trim();
+                var prompt = sourceStory.Prompt?.Trim();
+                if (string.IsNullOrWhiteSpace(savedPlan) || string.IsNullOrWhiteSpace(prompt))
+                {
+                    return false;
+                }
+
+                using var scope = _scopeFactory.CreateScope();
+                var engine = scope.ServiceProvider.GetRequiredService<NreEngine>();
+                var nreOptions = _nreOptionsMonitor.CurrentValue ?? new NarrativeRuntimeEngineOptions();
+                const string method = "state_driven";
+                var maxSteps = ComputePlanSteps(savedPlan, nreOptions);
+
+                var request = new EngineRequest
+                {
+                    EngineName = nreOptions.EngineName,
+                    Method = method,
+                    StructureMode = "standard",
+                    CostSeverity = "medium",
+                    CombatIntensity = "normal",
+                    MaxSteps = maxSteps,
+                    SnapshotOnFailure = nreOptions.SnapshotOnFailure,
+                    RunId = Guid.NewGuid().ToString("N"),
+                    UserPrompt = prompt,
+                    ResourceHints = null,
+                    PreApprovedPlanSummary = savedPlan,
+                    SeriesId = sourceStory.SerieId,
+                    SeriesEpisodeNumber = sourceStory.SerieEpisode
+                };
+
+                var title = string.IsNullOrWhiteSpace(sourceStory.Title)
+                    ? $"Story {sourceStory.Id}"
+                    : sourceStory.Title.Trim();
+                var runId = $"run_nre_from_plan_{method}_{sourceStory.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+
+                _customLogger.Start(runId);
+                _customLogger.Append(runId, $"Auto priority: rerun NRE da piano salvato per story {sourceStory.Id}.");
+
+                var cmd = new RunNreCommand(
+                    title: title,
+                    request: request,
+                    database: _database,
+                    engine: engine,
+                    options: Options.Create(nreOptions),
+                    logger: _customLogger,
+                    dispatcher: _dispatcher,
+                    storiesService: _stories,
+                    callCenter: _callCenter,
+                    existingStoryId: sourceStory.Id,
+                    skipIfExistingStoryMissing: true);
+
+                _dispatcher.Enqueue(
+                    "run_nre",
+                    async ctx => await cmd.ExecuteAsync(ctx.CancellationToken, ctx.RunId).ConfigureAwait(false),
+                    runId: runId,
+                    threadScope: $"story/run_nre_from_plan/{sourceStory.Id}",
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "run_nre_from_saved_plan",
+                        ["storyId"] = sourceStory.Id.ToString(),
+                        ["sourceStoryId"] = sourceStory.Id.ToString(),
+                        ["method"] = method,
+                        ["maxSteps"] = maxSteps.ToString(),
+                        ["engine"] = nreOptions.EngineName
+                    },
+                    priority: 2);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Auto priority rerun from saved plan failed");
+                return false;
+            }
+        }
+
+        private bool TryGetInsertedStoryWithSavedPlanAndNoActiveCommands(out StoryRecord? story)
+        {
+            story = null;
+
+            try
+            {
+                var statuses = _database.ListAllStoryStatuses();
+                var insertedIds = statuses
+                    .Where(s => string.Equals(s.Code, "inserted", StringComparison.OrdinalIgnoreCase)
+                             || string.Equals(s.Code, "inserito", StringComparison.OrdinalIgnoreCase))
+                    .Select(s => s.Id)
+                    .ToHashSet();
+                if (insertedIds.Count == 0)
+                {
+                    return false;
+                }
+
+                var candidates = _database.GetAllStories()
+                    .Where(s => !s.Deleted &&
+                                s.StatusId.HasValue &&
+                                insertedIds.Contains(s.StatusId.Value) &&
+                                string.IsNullOrWhiteSpace(s.StoryRaw) &&
+                                string.IsNullOrWhiteSpace(s.StoryRevised) &&
+                                !string.IsNullOrWhiteSpace(s.NrePlanSummary) &&
+                                !string.IsNullOrWhiteSpace(s.Prompt))
+                    .OrderBy(s => s.Id)
+                    .ToList();
+                if (candidates.Count == 0)
+                {
+                    return false;
+                }
+
+                foreach (var candidate in candidates)
+                {
+                    if (!HasQueuedOrRunningCommandsForStory(candidate.Id))
+                    {
+                        story = candidate;
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // best-effort
+            }
+
+            return false;
+        }
+
+        private bool HasQueuedOrRunningCommandsForStory(long storyId)
+        {
+            if (storyId <= 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var storyIdText = storyId.ToString();
+                return _dispatcher.GetActiveCommands().Any(s =>
+                {
+                    if (!IsQueuedOrRunningStatus(s.Status))
+                    {
+                        return false;
+                    }
+
+                    if (s.Metadata == null)
+                    {
+                        return false;
+                    }
+
+                    if (s.Metadata.TryGetValue("storyId", out var sid) &&
+                        string.Equals(sid, storyIdText, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    if (s.Metadata.TryGetValue("sourceStoryId", out var sourceSid) &&
+                        string.Equals(sourceSid, storyIdText, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    if (s.Metadata.TryGetValue("entityId", out var entityId) &&
+                        string.Equals(entityId, storyIdText, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+
+                    return false;
+                });
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int ComputePlanSteps(string? planSummary, NarrativeRuntimeEngineOptions options)
+        {
+            if (string.IsNullOrWhiteSpace(planSummary))
+            {
+                return Math.Max(1, options.DefaultMaxSteps);
+            }
+
+            var count = 0;
+            foreach (var rawLine in planSummary.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var line = rawLine.TrimStart();
+                var i = 0;
+                while (i < line.Length && char.IsDigit(line[i]))
+                {
+                    i++;
+                }
+
+                if (i > 0 && i < line.Length && line[i] == '.')
+                {
+                    count++;
+                }
+            }
+
+            return count > 0 ? count : Math.Max(1, options.DefaultMaxSteps);
         }
 
         private bool HasPendingStoryAutomationBacklog(AutomaticOperationsOptions opts)
         {
             try
             {
-                if (HasActiveNonIgnoredCommands())
+                var allowWorkWhileBusy = CanScheduleAdditionalWorkWhileBusyAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+
+                if (HasActiveNonIgnoredCommands() && !allowWorkWhileBusy)
                 {
                     return true;
                 }
 
                 if (opts.ReviseAndEvaluate?.Enabled == true &&
-                    CountStoriesByStatus(new[] { "inserted", "inserito" }) > 0)
+                    CountStoriesByStatus(new[] { "inserted", "inserito" }, requireStoryRaw: true) > 0)
                 {
                     return true;
                 }
@@ -402,7 +646,8 @@ namespace TinyGenerator.Services
                     return false;
                 }
 
-                if (HasActiveNonIgnoredCommands())
+                var allowWorkWhileBusy = CanScheduleAdditionalWorkWhileBusyAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+                if (HasActiveNonIgnoredCommands() && !allowWorkWhileBusy)
                 {
                     return false;
                 }
@@ -522,8 +767,8 @@ namespace TinyGenerator.Services
                     hasCandidate: () =>
                     {
                         const string filter = "status in (inserted)";
-                        var ok = TryGetBestStoryByStatus(new[] { "inserted", "inserito" }, out var storyId, out var reason);
-                        var count = CountStoriesByStatus(new[] { "inserted", "inserito" });
+                        var ok = TryGetBestStoryByStatus(new[] { "inserted", "inserito" }, out var storyId, out var reason, requireStoryRaw: true);
+                        var count = CountStoriesByStatus(new[] { "inserted", "inserito" }, requireStoryRaw: true);
                         var title = storyId > 0 ? _database.GetStoryById(storyId)?.Title : null;
                         return ok
                             ? new IdleTaskResult(true, storyId, null, filter, count, title)
@@ -532,10 +777,14 @@ namespace TinyGenerator.Services
                     tryEnqueue: () =>
                     {
                         const string filter = "status in (inserted)";
-                        var count = CountStoriesByStatus(new[] { "inserted", "inserito" });
-                        if (!TryGetBestStoryByStatus(new[] { "inserted", "inserito" }, out var storyId, out var reason))
+                        var count = CountStoriesByStatus(new[] { "inserted", "inserito" }, requireStoryRaw: true);
+                        if (!TryGetBestStoryByStatus(new[] { "inserted", "inserito" }, out var storyId, out var reason, requireStoryRaw: true))
                         {
                             return new IdleTaskResult(false, null, reason ?? "nessuna storia in stato inserted", filter, count);
+                        }
+                        if (IsReviseStoryQueued(storyId))
+                        {
+                            return new IdleTaskResult(false, storyId, "already queued", filter, count);
                         }
                         var runId = _stories.EnqueueReviseStoryCommand(storyId, trigger: "idle_auto", priority: Math.Max(1, opts.ReviseAndEvaluate.Priority), force: false);
                         var title = _database.GetStoryById(storyId)?.Title;
@@ -707,6 +956,43 @@ namespace TinyGenerator.Services
             }
         }
 
+        private int CountQueuedOperations(params string[] operationNames)
+        {
+            if (operationNames == null || operationNames.Length == 0)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return _dispatcher.GetActiveCommands().Count(s =>
+                {
+                    if (!IsQueuedOrRunningStatus(s.Status))
+                    {
+                        return false;
+                    }
+
+                    if (operationNames.Any(op => string.Equals(s.OperationName, op, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return true;
+                    }
+
+                    if (s.Metadata != null &&
+                        s.Metadata.TryGetValue("operation", out var metadataOperation) &&
+                        operationNames.Any(op => string.Equals(metadataOperation, op, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return true;
+                    }
+
+                    return false;
+                });
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
         private static bool IsQueuedOrRunningStatus(string? status)
         {
             if (string.IsNullOrWhiteSpace(status)) return false;
@@ -716,7 +1002,25 @@ namespace TinyGenerator.Services
                    || status.Equals("batch_running", StringComparison.OrdinalIgnoreCase);
         }
 
-        private bool TryGetBestStoryByStatus(IEnumerable<string> statusCodes, out long storyId, out string? reason)
+        private async Task<bool> CanScheduleAdditionalWorkWhileBusyAsync(CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                if (_commandDispatcher == null || !_commandDispatcher.IsMonomodelModeActive())
+                {
+                    return false;
+                }
+
+                return await _commandDispatcher.CanAcceptAdditionalMonomodelWorkAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Unable to evaluate vLLM monomodel spare capacity");
+                return false;
+            }
+        }
+
+        private bool TryGetBestStoryByStatus(IEnumerable<string> statusCodes, out long storyId, out string? reason, bool requireStoryRaw = false)
         {
             storyId = 0;
             reason = null;
@@ -750,6 +1054,18 @@ namespace TinyGenerator.Services
             {
                 reason = "nessuna storia nello stato richiesto";
                 return false;
+            }
+
+            if (requireStoryRaw)
+            {
+                stories = stories
+                    .Where(HasStoryRawContent)
+                    .ToList();
+                if (stories.Count == 0)
+                {
+                    reason = "nessuna storia con story_raw valorizzato nello stato richiesto";
+                    return false;
+                }
             }
 
             var best = stories
@@ -964,7 +1280,7 @@ namespace TinyGenerator.Services
             }
         }
 
-        private int CountStoriesByStatus(IEnumerable<string> statusCodes)
+        private int CountStoriesByStatus(IEnumerable<string> statusCodes, bool requireStoryRaw = false)
         {
             var codes = statusCodes?.Where(c => !string.IsNullOrWhiteSpace(c))
                 .Select(c => c.Trim().ToLowerInvariant())
@@ -978,8 +1294,53 @@ namespace TinyGenerator.Services
                 .ToHashSet();
             if (statusIds.Count == 0) return 0;
 
-            return _database.GetAllStories()
-                .Count(s => s.StatusId.HasValue && statusIds.Contains(s.StatusId.Value) && !s.Deleted);
+            var stories = _database.GetAllStories()
+                .Where(s => s.StatusId.HasValue && statusIds.Contains(s.StatusId.Value) && !s.Deleted);
+
+            if (!requireStoryRaw)
+            {
+                return stories.Count();
+            }
+
+            return stories.Count(HasStoryRawContent);
+        }
+
+        private bool IsReviseStoryQueued(long storyId)
+        {
+            if (storyId <= 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                var storyIdText = storyId.ToString();
+                return _dispatcher.GetActiveCommands().Any(s =>
+                    IsQueuedOrRunningStatus(s.Status) &&
+                    (
+                        string.Equals(s.OperationName, "revise_story", StringComparison.OrdinalIgnoreCase) ||
+                        (s.Metadata != null &&
+                         s.Metadata.TryGetValue("operation", out var operation) &&
+                         string.Equals(operation, "revise_story", StringComparison.OrdinalIgnoreCase))
+                    ) &&
+                    s.Metadata != null &&
+                    s.Metadata.TryGetValue("storyId", out var sid) &&
+                    string.Equals(sid, storyIdText, StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool HasStoryRawContent(StoryRecord story)
+        {
+            if (story == null)
+            {
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace(story.StoryRaw);
         }
 
         private int CountRevisedStoriesNeedingEvaluations(int minEvaluations)

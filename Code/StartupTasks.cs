@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using TinyGenerator.Configuration;
 using TinyGenerator.Services;
 using TinyGenerator.Services.Commands;
 
@@ -21,7 +22,7 @@ namespace TinyGenerator
     {
         if (configuration == null) return;
 
-        var serverExe = configuration["LlamaCpp:ServerExe"] ?? "llama-server.exe";
+        var serverExe = ExternalServerConfig.GetRequiredValue(configuration, "LlamaCpp:ServerExe");
         var processName = Path.GetFileNameWithoutExtension(serverExe);
         if (string.IsNullOrWhiteSpace(processName)) return;
 
@@ -429,12 +430,9 @@ namespace TinyGenerator
                 // Imposta l'endpoint Ollama da configurazione se disponibile
                 if (config != null)
                 {
-                    var ollamaEndpoint = config["Ollama:endpoint"];
-                    if (!string.IsNullOrWhiteSpace(ollamaEndpoint))
-                    {
-                        logger?.LogInformation("[Startup] Setting Ollama endpoint to: {endpoint}", ollamaEndpoint);
-                        monitor?.SetOllamaEndpoint(ollamaEndpoint);
-                    }
+                    var ollamaEndpoint = ExternalServerConfig.GetRequiredValue(config, "Ollama:Endpoint");
+                    logger?.LogInformation("[Startup] Setting Ollama endpoint to: {endpoint}", ollamaEndpoint);
+                    monitor?.SetOllamaEndpoint(ollamaEndpoint);
                 }
 
                 logger?.LogInformation("[Startup] Populating local Ollama models...");

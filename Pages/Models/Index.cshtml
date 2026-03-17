@@ -139,6 +139,10 @@
                             {
                                 <span class="badge bg-success">ollama</span>
                             }
+                            else if (m.Provider?.ToLower() == "vllm")
+                            {
+                                <span class="badge bg-info text-dark">vllm</span>
+                            }
                             else if (m.Provider?.ToLower() == "openai")
                             {
                                 <span class="badge bg-warning text-dark">openai</span>

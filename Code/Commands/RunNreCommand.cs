@@ -13,6 +13,8 @@ public sealed class RunNreCommand : ICommand
     private readonly ICommandDispatcher? _dispatcher;
     private readonly StoriesService? _storiesService;
     private readonly ICallCenter? _callCenter;
+    private readonly long? _existingStoryId;
+    private readonly bool _skipIfExistingStoryMissing;
     private readonly string _title;
     private readonly EngineRequest _request;
 
@@ -25,7 +27,9 @@ public sealed class RunNreCommand : ICommand
         ICustomLogger? logger = null,
         ICommandDispatcher? dispatcher = null,
         StoriesService? storiesService = null,
-        ICallCenter? callCenter = null)
+        ICallCenter? callCenter = null,
+        long? existingStoryId = null,
+        bool skipIfExistingStoryMissing = false)
     {
         _title = string.IsNullOrWhiteSpace(title) ? "NRE Story" : title.Trim();
         _request = request ?? throw new ArgumentNullException(nameof(request));
@@ -36,6 +40,10 @@ public sealed class RunNreCommand : ICommand
         _dispatcher = dispatcher;
         _storiesService = storiesService;
         _callCenter = callCenter;
+        _existingStoryId = existingStoryId.HasValue && existingStoryId.Value > 0
+            ? existingStoryId.Value
+            : null;
+        _skipIfExistingStoryMissing = skipIfExistingStoryMissing;
     }
 
     public event EventHandler<CommandProgressEventArgs>? Progress;
@@ -79,29 +87,57 @@ public sealed class RunNreCommand : ICommand
         var doneStatusId = _database.GetStoryStatusByCode(_options.StoryStatuses.Done)?.Id;
         var failedStatusId = _database.GetStoryStatusByCode(_options.StoryStatuses.Failed)?.Id;
 
-        var storyId = _database.InsertSingleStory(
-            prompt: _request.UserPrompt!,
-            story: string.Empty,
-            modelId: writerAgent.ModelId,
-            agentId: writerAgent.Id,
-            title: _title,
-            serieId: _request.SeriesId.HasValue ? checked((int)_request.SeriesId.Value) : null,
-            serieEpisode: _request.SeriesEpisodeNumber);
-
-        if (storyId <= 0)
+        long storyId;
+        StoryRecord? story;
+        if (_existingStoryId.HasValue)
         {
-            return new CommandResult(false, "Impossibile creare la story NRE.");
+            storyId = _existingStoryId.Value;
+            story = _database.GetStoryById(storyId);
+            if (story == null)
+            {
+                if (_skipIfExistingStoryMissing)
+                {
+                    _logger?.Append(effectiveRunId, $"Rerun NRE skipped: story {storyId} non trovata.", "warning");
+                    return new CommandResult(true, $"Rerun NRE skipped: story {storyId} non trovata.");
+                }
+
+                return new CommandResult(false, $"Story {storyId} non trovata per rerun NRE.");
+            }
+
+            _database.UpdateStoryById(
+                storyId,
+                story: string.Empty,
+                statusId: runningStatusId,
+                updateStatus: runningStatusId.HasValue);
+            _logger?.Append(effectiveRunId, $"Rerun NRE su story esistente: {storyId}");
+        }
+        else
+        {
+            storyId = _database.InsertSingleStory(
+                prompt: _request.UserPrompt!,
+                story: string.Empty,
+                modelId: writerAgent.ModelId,
+                agentId: writerAgent.Id,
+                title: _title,
+                serieId: _request.SeriesId.HasValue ? checked((int)_request.SeriesId.Value) : null,
+                serieEpisode: _request.SeriesEpisodeNumber);
+
+            if (storyId <= 0)
+            {
+                return new CommandResult(false, "Impossibile creare la story NRE.");
+            }
+
+            if (runningStatusId.HasValue)
+            {
+                _database.UpdateStoryById(storyId, statusId: runningStatusId.Value, updateStatus: true);
+            }
+
+            story = _database.GetStoryById(storyId);
         }
 
-        if (runningStatusId.HasValue)
-        {
-            _database.UpdateStoryById(storyId, statusId: runningStatusId.Value, updateStatus: true);
-        }
-
-        var story = _database.GetStoryById(storyId);
         if (story == null)
         {
-            return new CommandResult(false, $"Story {storyId} creata ma non rileggibile.");
+            return new CommandResult(false, $"Story {storyId} non rileggibile.");
         }
 
         var folderName = string.IsNullOrWhiteSpace(story.Folder)
@@ -120,6 +156,7 @@ public sealed class RunNreCommand : ICommand
 
         _logger?.Append(effectiveRunId, $"Story creata: {storyId}");
         _logger?.Append(effectiveRunId, $"Folder: {folderName}");
+        UpdateDispatcherRuntimeStoryMetadata(effectiveRunId, storyId, folderName);
         _dispatcher?.UpdateStep(effectiveRunId, 0, Math.Max(1, _request.MaxSteps), "Preparazione NRE");
 
         var engineContext = new EngineContext
@@ -429,5 +466,30 @@ public sealed class RunNreCommand : ICommand
         return agents.FirstOrDefault(a =>
             a.Description.Contains(preferredName, StringComparison.OrdinalIgnoreCase) ||
             a.Role.Contains(preferredName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void UpdateDispatcherRuntimeStoryMetadata(string runId, long storyId, string? folder)
+    {
+        if (storyId <= 0 || string.IsNullOrWhiteSpace(runId))
+        {
+            return;
+        }
+
+        if (_dispatcher is not CommandDispatcher concreteDispatcher)
+        {
+            return;
+        }
+
+        var updates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["storyId"] = storyId.ToString()
+        };
+
+        if (!string.IsNullOrWhiteSpace(folder))
+        {
+            updates["folder"] = folder.Trim();
+        }
+
+        concreteDispatcher.UpdateMetadata(runId, updates, overwriteExisting: true);
     }
 }

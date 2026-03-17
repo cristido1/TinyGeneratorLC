@@ -32,10 +32,12 @@ namespace TinyGenerator.Services
         private readonly HttpClient _httpClient;
         private readonly ICustomLogger? _logger;
         private bool? _forceOllama;
+        private bool _isVllm;
         private Func<CancellationToken, Task>? _beforeCallAsync;
         private Func<CancellationToken, Task>? _afterCallAsync;
         private bool _logRequestsAsLlama;
         private readonly IServiceProvider? _services;
+        private readonly AsyncLocal<long?> _currentPrimaryResponseLogId = new();
         public double Temperature { get; set; } = 0.7;
         public double TopP { get; set; } = 1.0;
         public double? RepeatPenalty { get; set; }
@@ -68,6 +70,7 @@ namespace TinyGenerator.Services
             HttpClient? httpClient = null,
             ICustomLogger? logger = null,
             bool? forceOllama = null,
+            bool isVllm = false,
             Func<CancellationToken, Task>? beforeCallAsync = null,
             Func<CancellationToken, Task>? afterCallAsync = null,
             bool logRequestsAsLlama = false,
@@ -88,6 +91,7 @@ namespace TinyGenerator.Services
             _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             _logger = logger;
             _forceOllama = forceOllama;
+            _isVllm = isVllm;
             _beforeCallAsync = beforeCallAsync;
             _afterCallAsync = afterCallAsync;
             _logRequestsAsLlama = logRequestsAsLlama;
@@ -212,21 +216,7 @@ namespace TinyGenerator.Services
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception) { throw; }
 
-                // Ensure the primary model response log row is persisted before we attempt to
-                // capture its Id and before invoking response_checker (which produces its own log rows).
-                try
-                {
-                    if (_logger != null)
-                    {
-                        await _logger.FlushAsync().ConfigureAwait(false);
-                    }
-                }
-                catch
-                {
-                    // best-effort: continue even if flush fails
-                }
-
-                lastPrimaryResponseLogId = TryGetLatestPrimaryModelResponseLogId();
+                lastPrimaryResponseLogId = _currentPrimaryResponseLogId.Value ?? TryGetLatestPrimaryModelResponseLogId();
                 var validation = await ValidateResponseJsonAsync(
                     messages,
                     tools,
@@ -367,6 +357,7 @@ namespace TinyGenerator.Services
 
                 var threadId = TryGetEffectiveModelTrafficThreadId();
                 if (threadId is null || threadId.Value <= 0) return null;
+                var storyId = LogScope.CurrentStoryId;
 
                 // Exclude internal checker agent by construction: this is called immediately after the primary model call,
                 // before invoking response_checker (which produces its own ModelResponse rows).
@@ -376,11 +367,19 @@ namespace TinyGenerator.Services
                 var agentName = LogScope.CurrentAgentName;
                 if (!string.IsNullOrWhiteSpace(agentName))
                 {
-                    return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: agentName, modelName: modelId);
+                    return db.TryGetLatestModelResponseLogId(
+                        threadId.Value,
+                        agentName: agentName,
+                        modelName: modelId,
+                        storyId: storyId);
                 }
 
                 // Some commands do not set CurrentAgentName in scope: fall back to a thread+model lookup.
-                return db.TryGetLatestModelResponseLogId(threadId.Value, agentName: null, modelName: modelId);
+                return db.TryGetLatestModelResponseLogId(
+                    threadId.Value,
+                    agentName: null,
+                    modelName: modelId,
+                    storyId: storyId);
             }
             catch
             {
@@ -482,6 +481,64 @@ namespace TinyGenerator.Services
 
             if (options.SkipRoles == null || options.SkipRoles.Count == 0) return false;
             return options.SkipRoles.Any(r => string.Equals(r?.Trim(), role, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private long? TryPersistPrimaryModelResponseLogNow(string modelId, string responseJson, int? threadId, string? agentName)
+        {
+            try
+            {
+                if (_services == null)
+                {
+                    return null;
+                }
+
+                var db = _services.GetService<DatabaseService>();
+                if (db == null)
+                {
+                    return null;
+                }
+
+                var effectiveThreadId = threadId ?? LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
+                var effectiveAgentName = !string.IsNullOrWhiteSpace(agentName)
+                    ? agentName!.Trim()
+                    : LogScope.CurrentAgentName;
+                var scope = (LogScope.Current ?? "unknown").Trim();
+                var storyId = LogScope.CurrentStoryId.HasValue
+                    && LogScope.CurrentStoryId.Value > 0
+                    && LogScope.CurrentStoryId.Value <= int.MaxValue
+                    ? (int?)LogScope.CurrentStoryId.Value
+                    : null;
+
+                var (textContent, _) = ParseChatResponse(responseJson);
+                var chatText = string.IsNullOrWhiteSpace(textContent) ? responseJson : textContent!;
+                var entry = new LogEntry
+                {
+                    Ts = DateTime.UtcNow.ToString("o"),
+                    Level = "Information",
+                    Category = "ModelResponse",
+                    Message = $"[{modelId}] RESPONSE_JSON: {responseJson}",
+                    Exception = null,
+                    State = null,
+                    ThreadId = effectiveThreadId,
+                    StoryId = storyId,
+                    ThreadScope = scope,
+                    AgentName = effectiveAgentName,
+                    ModelName = modelId,
+                    Context = null,
+                    Analized = false,
+                    ChatText = chatText,
+                    Result = "SUCCESS",
+                    ResultFailReason = null,
+                    Examined = false,
+                    DurationSecs = 1
+                };
+
+                return db.InsertLogEntryImmediate(entry);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static bool IsCheckerEnabledForOperation(ResponseValidationOptions options, string operationKey)
@@ -1155,6 +1212,7 @@ namespace TinyGenerator.Services
             _modelId = other._modelId;
             _apiKey = other._apiKey;
             _forceOllama = other._forceOllama;
+            _isVllm = other._isVllm;
             _beforeCallAsync = other._beforeCallAsync;
             _afterCallAsync = other._afterCallAsync;
             _logRequestsAsLlama = other._logRequestsAsLlama;
@@ -1214,17 +1272,6 @@ namespace TinyGenerator.Services
                 {
                     _logger?.Log("Debug", "LangChainBridge", $"[ReqID: {requestId}] Routing a Ollama ({tools.Count} tools)");
                     var ollamaStreaming = EnableStreaming && StreamChunkCallbackAsync != null;
-                    try
-                    {
-                        Console.WriteLine(
-                            $"[StoryLive TRACE] bridge_route req={requestId} provider=ollama model={_modelId} " +
-                            $"enable_streaming={EnableStreaming} callback_present={StreamChunkCallbackAsync != null} " +
-                            $"ollama_stream_field={ollamaStreaming}");
-                    }
-                    catch
-                    {
-                        // No-op tracing
-                    }
                     
                     var requestBody = new Dictionary<string, object>
                     {
@@ -1277,16 +1324,6 @@ namespace TinyGenerator.Services
                 else
                 {
                     _logger?.Log("Debug", "LangChainBridge", $"[ReqID: {requestId}] Routing a OpenAI-compatible endpoint");
-                    try
-                    {
-                        Console.WriteLine(
-                            $"[StoryLive TRACE] bridge_route req={requestId} provider=openai_compatible model={_modelId} " +
-                            $"enable_streaming={EnableStreaming} callback_present={StreamChunkCallbackAsync != null} (streaming live non gestito qui)");
-                    }
-                    catch
-                    {
-                        // No-op tracing
-                    }
                     
                     // Determine if model uses new parameter name (o1, gpt-4o series)
                     bool usesNewTokenParam = _modelId.Contains("o1", StringComparison.OrdinalIgnoreCase) ||
@@ -1344,8 +1381,15 @@ namespace TinyGenerator.Services
                     if (!_noNumPredictModels.Contains(_modelId) && NumPredict.HasValue) requestDict["num_predict"] = NumPredict.Value;
                     if (!_noFrequencyPenaltyModels.Contains(_modelId))
                         requestDict["frequency_penalty"] = 0.0; // Replace with actual value if used
+                    if (_isVllm && Think.HasValue)
+                    {
+                        requestDict["chat_template_kwargs"] = new Dictionary<string, object>
+                        {
+                            ["enable_thinking"] = Think.Value
+                        };
+                    }
                     if (ResponseFormat != null)
-                        requestDict["response_format"] = ResponseFormat;
+                        requestDict["response_format"] = NormalizeResponseFormatForProvider(ResponseFormat);
                     if (tools.Any())
                         requestDict["tools"] = tools;
                     // Add correct token limit parameter based on model
@@ -1353,10 +1397,20 @@ namespace TinyGenerator.Services
                     {
                         if (!_noMaxTokensModels.Contains(_modelId))
                         {
+                            var effectiveMaxTokens = MaxResponseTokens.Value;
+                            if (_isVllm)
+                            {
+                                effectiveMaxTokens = ClampVllmMaxTokens(
+                                    effectiveMaxTokens,
+                                    serializedMessages,
+                                    tools,
+                                    ResponseFormat != null);
+                            }
+
                             if (usesNewTokenParam)
-                                requestDict["max_completion_tokens"] = MaxResponseTokens.Value;
+                                requestDict["max_completion_tokens"] = effectiveMaxTokens;
                             else
-                                requestDict["max_tokens"] = MaxResponseTokens.Value;
+                                requestDict["max_tokens"] = effectiveMaxTokens;
                         }
                     }
                     
@@ -1399,16 +1453,6 @@ namespace TinyGenerator.Services
 
                 var response = await _httpClient.SendAsync(httpRequest, ct);
                 var useOllamaStreamingResponse = isOllama && EnableStreaming && StreamChunkCallbackAsync != null;
-                try
-                {
-                    Console.WriteLine(
-                        $"[StoryLive TRACE] bridge_http_response req={requestId} model={_modelId} status={(int)response.StatusCode} " +
-                        $"is_ollama={isOllama} use_ollama_streaming_response={useOllamaStreamingResponse}");
-                }
-                catch
-                {
-                    // No-op tracing
-                }
                 string responseContent;
                 if (useOllamaStreamingResponse && response.IsSuccessStatusCode)
                 {
@@ -1420,7 +1464,12 @@ namespace TinyGenerator.Services
                 }
 
                 _logger?.Log("Info", "LangChainBridge", $"Model responded (status={response.StatusCode})");
-                _logger?.LogResponseJson(_modelId, responseContent, currentThreadId, LogScope.CurrentAgentName);
+                var persistedLogId = TryPersistPrimaryModelResponseLogNow(_modelId, responseContent, currentThreadId, LogScope.CurrentAgentName);
+                _currentPrimaryResponseLogId.Value = persistedLogId;
+                if (!persistedLogId.HasValue || persistedLogId.Value <= 0)
+                {
+                    _logger?.LogResponseJson(_modelId, responseContent, currentThreadId, LogScope.CurrentAgentName);
+                }
                 // capture response for possible error diagnostics only
                 responseContentForLlama = responseContent;
                 responseStatusForLlama = (int)response.StatusCode;
@@ -1546,14 +1595,6 @@ namespace TinyGenerator.Services
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             using var reader = new StreamReader(stream);
-            try
-            {
-                Console.WriteLine($"[StoryLive TRACE] ollama_stream_start model={_modelId}");
-            }
-            catch
-            {
-                // No-op tracing
-            }
             while (!reader.EndOfStream)
             {
                 ct.ThrowIfCancellationRequested();
@@ -1576,27 +1617,11 @@ namespace TinyGenerator.Services
                         if (!string.IsNullOrEmpty(delta))
                         {
                             streamChunks++;
-                            try
-                            {
-                                Console.WriteLine($"[StoryLive TRACE] ollama_stream_delta model={_modelId} chunk_no={streamChunks} len={delta.Length}");
-                            }
-                            catch
-                            {
-                                // No-op tracing
-                            }
                             contentBuilder.Append(delta);
                             if (StreamChunkCallbackAsync != null)
                             {
                                 try
                                 {
-                                    try
-                                    {
-                                        Console.WriteLine($"[StoryLive TRACE] ollama_stream_callback_invoke model={_modelId} chunk_no={streamChunks}");
-                                    }
-                                    catch
-                                    {
-                                        // No-op tracing
-                                    }
                                     await StreamChunkCallbackAsync(delta).ConfigureAwait(false);
                                 }
                                 catch
@@ -1659,17 +1684,6 @@ namespace TinyGenerator.Services
             if (promptEvalDuration.HasValue) payload["prompt_eval_duration"] = promptEvalDuration.Value;
             if (evalCount.HasValue) payload["eval_count"] = evalCount.Value;
             if (evalDuration.HasValue) payload["eval_duration"] = evalDuration.Value;
-
-            try
-            {
-                Console.WriteLine(
-                    $"[StoryLive TRACE] ollama_stream_end model={_modelId} chunks={streamChunks} " +
-                    $"content_len={contentBuilder.Length} done_reason={doneReason ?? "(null)"}");
-            }
-            catch
-            {
-                // No-op tracing
-            }
 
             return JsonSerializer.Serialize(payload);
         }
@@ -1963,6 +1977,127 @@ namespace TinyGenerator.Services
                 }
             }
         }
+
+        private int ClampVllmMaxTokens(
+            int requestedMaxTokens,
+            IReadOnlyList<Dictionary<string, object>> serializedMessages,
+            IReadOnlyList<Dictionary<string, object>> tools,
+            bool hasStructuredResponseFormat)
+        {
+            var positiveRequested = Math.Max(1, requestedMaxTokens);
+            if (!NumCtx.HasValue || NumCtx.Value <= 0)
+            {
+                return positiveRequested;
+            }
+
+            var estimatedInputTokens = EstimateVllmInputTokens(serializedMessages, tools, hasStructuredResponseFormat);
+            var dynamicSlack = Math.Max(64, estimatedInputTokens / 20);
+            var safetyBuffer = 256 + dynamicSlack;
+            var safeLimit = NumCtx.Value - estimatedInputTokens - safetyBuffer;
+            if (safeLimit <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"vLLM prompt troppo lungo per il contesto disponibile: num_ctx={NumCtx.Value}, input_stimato={estimatedInputTokens}, margine_sicurezza={safetyBuffer}. Riduci prompt/schema o aumenta MaxModelLen.");
+            }
+
+            return Math.Min(positiveRequested, safeLimit);
+        }
+
+        private static int EstimateVllmInputTokens(
+            IReadOnlyList<Dictionary<string, object>> serializedMessages,
+            IReadOnlyList<Dictionary<string, object>> tools,
+            bool hasStructuredResponseFormat)
+        {
+            var contentChars = 0;
+            var structuralOverhead = 0;
+
+            foreach (var message in serializedMessages)
+            {
+                if (message.TryGetValue("content", out var contentObj) && contentObj != null)
+                {
+                    contentChars += contentObj.ToString()?.Length ?? 0;
+                }
+
+                if (message.TryGetValue("role", out var roleObj) && roleObj != null)
+                {
+                    structuralOverhead += 8 + (roleObj.ToString()?.Length ?? 0);
+                }
+
+                // Small per-message overhead for separators / wrappers.
+                structuralOverhead += 16;
+            }
+
+            if (tools.Count > 0)
+            {
+                structuralOverhead += JsonSerializer.Serialize(tools).Length / 4;
+            }
+
+            if (hasStructuredResponseFormat)
+            {
+                // response_format is not part of the visible prompt, but reserve a modest budget
+                // because some providers count schema-related serialization overhead.
+                structuralOverhead += 256;
+            }
+
+            // Approximation closer to actual tokenizer behavior for Italian prose + JSON payloads.
+            // Using only the serialized request length was too pessimistic and could collapse
+            // the output budget to 1 token on large but still valid prompts.
+            var estimated = (contentChars / 4) + structuralOverhead + 64;
+            return Math.Max(128, estimated);
+        }
+
+        private object NormalizeResponseFormatForProvider(object responseFormat)
+        {
+            if (!_isVllm)
+            {
+                return responseFormat;
+            }
+
+            JsonElement element;
+            if (responseFormat is JsonElement jsonElement)
+            {
+                element = jsonElement;
+            }
+            else
+            {
+                element = JsonSerializer.SerializeToElement(responseFormat);
+            }
+
+            if (element.ValueKind == JsonValueKind.Object &&
+                element.TryGetProperty("type", out var typeProp) &&
+                typeProp.ValueKind == JsonValueKind.String)
+            {
+                var typeValue = typeProp.GetString();
+                if (string.Equals(typeValue, "json_schema", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(typeValue, "json_object", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(typeValue, "text", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(typeValue, "structural_tag", StringComparison.OrdinalIgnoreCase))
+                {
+                    return responseFormat;
+                }
+            }
+
+            var schemaName = SanitizeResponseFormatName(_modelId);
+            return new Dictionary<string, object?>
+            {
+                ["type"] = "json_schema",
+                ["json_schema"] = new Dictionary<string, object?>
+                {
+                    ["name"] = schemaName,
+                    ["schema"] = responseFormat
+                }
+            };
+        }
+
+        private static string SanitizeResponseFormatName(string? modelId)
+        {
+            var source = string.IsNullOrWhiteSpace(modelId) ? "response_schema" : modelId;
+            var chars = source
+                .Select(ch => char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '_')
+                .ToArray();
+            var sanitized = new string(chars).Trim('_');
+            return string.IsNullOrWhiteSpace(sanitized) ? "response_schema" : sanitized;
+        }
     }
 
     public class ToolCallFromModel
@@ -2011,7 +2146,7 @@ namespace TinyGenerator.Services
                 var noRepeatLastNModels = config.GetSection("OpenAI:NoRepeatLastNModels").Get<string[]>() ?? Array.Empty<string>();
                 var noNumPredictModels = config.GetSection("OpenAI:NoNumPredictModels").Get<string[]>() ?? Array.Empty<string>();
 
-                _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger, null, null, null, false, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels);
+                _modelBridge = new LangChainChatBridge(modelEndpoint, modelId, apiKey, httpClient, logger, null, false, null, null, false, noTempModels, noRepeatPenaltyModels, noTopPModels, noFrequencyPenaltyModels, noMaxTokensModels, noTopKModels, noRepeatLastNModels, noNumPredictModels);
             }
             catch (Exception ex)
             {
@@ -2083,5 +2218,6 @@ namespace TinyGenerator.Services
             // For now, return a placeholder
             return await Task.FromResult("Story generation with LangChain integration pending full model bridge implementation");
         }
+
     }
 }

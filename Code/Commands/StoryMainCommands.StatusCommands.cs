@@ -308,7 +308,7 @@ public sealed partial class StoryMainCommands
                 overallSuccess = false;
             }
 
-            if (overallSuccess && _service.IsTtsSchemaAutoLaunchEnabled())
+            if (overallSuccess && _service.IsTtsSchemaAutoLaunchEnabled() && !_service.IsCurrentDispatcherRunStatusChain())
             {
                 try
                 {

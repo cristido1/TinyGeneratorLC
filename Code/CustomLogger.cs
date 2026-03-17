@@ -2,6 +2,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
@@ -32,7 +34,17 @@ namespace TinyGenerator.Services
         private readonly bool _logRequestResponse;
         private readonly bool _logToolResponses;
         private readonly bool _otherLogs;
+        private readonly bool _enableDuplicateSuppression;
+        private readonly TimeSpan _duplicateWindow;
+        private readonly int _maxIdenticalEntriesPerWindow;
+        private readonly ConcurrentDictionary<string, DuplicateLogState> _recentDuplicates = new(StringComparer.Ordinal);
         private bool _disposed;
+
+        private sealed class DuplicateLogState
+        {
+            public DateTime WindowStartUtc { get; set; }
+            public int Count { get; set; }
+        }
 
         public CustomLogger(DatabaseService databaseService, CustomLoggerOptions options, IHubContext<ProgressHub>? hubContext = null)
         {
@@ -44,6 +56,9 @@ namespace TinyGenerator.Services
             _logRequestResponse = options.LogRequestResponse;
             _logToolResponses = options.LogToolResponses;
             _otherLogs = options.OtherLogs;
+            _enableDuplicateSuppression = options.EnableDuplicateSuppression;
+            _duplicateWindow = TimeSpan.FromSeconds(Math.Max(1, options.DuplicateWindowSeconds));
+            _maxIdenticalEntriesPerWindow = Math.Max(1, options.MaxIdenticalEntriesPerWindow);
             LoadEventDefinitions();
 
             // Timer triggers periodic flush (best-effort)
@@ -179,24 +194,100 @@ namespace TinyGenerator.Services
                 DurationSecs = NormalizeDuration(durationSecs)
             };
 
-            bool shouldFlush = false;
-            lock (_lock)
+            if (ShouldSuppressDuplicatePersistedEntry(entry))
             {
-                _buffer.Add(entry);
-                if (_buffer.Count >= _batchSize) shouldFlush = true;
+                return;
             }
 
-            if (shouldFlush)
+            try
             {
-                // fire-and-forget flush; if semaphore is busy, FlushAsync will return quickly and postpone
-                _ = Task.Run(() => TryFlushAsync());
+                _db.InsertLogEntryImmediate(entry);
             }
+            catch
+            {
+                // best-effort
+            }
+
+            _ = BroadcastLogsAsync(new[] { entry });
         }
 
         private static int NormalizeDuration(int? durationSecs)
         {
             if (!durationSecs.HasValue) return 1;
             return Math.Max(1, durationSecs.Value);
+        }
+
+        private bool ShouldSuppressDuplicatePersistedEntry(LogEntry entry)
+        {
+            if (!_enableDuplicateSuppression || entry == null)
+            {
+                return false;
+            }
+
+            var signature = BuildDuplicateSignature(entry);
+            if (string.IsNullOrWhiteSpace(signature))
+            {
+                return false;
+            }
+
+            var now = DateTime.UtcNow;
+            var state = _recentDuplicates.AddOrUpdate(
+                signature,
+                _ => new DuplicateLogState { WindowStartUtc = now, Count = 1 },
+                (_, existing) =>
+                {
+                    if (now - existing.WindowStartUtc > _duplicateWindow)
+                    {
+                        existing.WindowStartUtc = now;
+                        existing.Count = 1;
+                    }
+                    else
+                    {
+                        existing.Count++;
+                    }
+
+                    return existing;
+                });
+
+            return state.Count > _maxIdenticalEntriesPerWindow;
+        }
+
+        private static string BuildDuplicateSignature(LogEntry entry)
+        {
+            static string Normalize(string? value)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    return string.Empty;
+                }
+
+                var trimmed = value.Trim();
+                trimmed = System.Text.RegularExpressions.Regex.Replace(trimmed, @"\s+", " ");
+                return trimmed.Length <= 512 ? trimmed : trimmed[..512];
+            }
+
+            var baseText = string.Join("|", new[]
+            {
+                Normalize(entry.Level),
+                Normalize(entry.Category),
+                Normalize(entry.ThreadScope),
+                Normalize(entry.AgentName),
+                Normalize(entry.ModelName),
+                entry.ThreadId.ToString(),
+                entry.StoryId?.ToString() ?? string.Empty,
+                Normalize(entry.Message),
+                Normalize(entry.Exception),
+                Normalize(entry.State),
+                Normalize(entry.Result)
+            });
+
+            if (string.IsNullOrWhiteSpace(baseText))
+            {
+                return string.Empty;
+            }
+
+            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(baseText));
+            return Convert.ToHexString(bytes);
         }
 
         private static string ResolveOperationScope(string? scope, string? category, string? message)
@@ -502,17 +593,42 @@ namespace TinyGenerator.Services
         public void MarkLatestModelResponseResult(string result, string? failReason = null, bool? examined = null)
         {
             if (_disposed) return;
-
             var effectiveThreadId = TryGetEffectiveThreadIdForModelTraffic();
             if (effectiveThreadId <= 0) return;
 
             try
             {
+                var scopedStoryId = LogScope.CurrentStoryId;
                 _db.UpdateLatestModelResponseResult(
                     effectiveThreadId,
                     result,
                     failReason,
-                    examined ?? true);
+                    examined ?? true,
+                    scopedStoryId.HasValue && scopedStoryId.Value > 0 ? scopedStoryId.Value : null);
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
+
+        public void MarkLatestModelResponseResultForAgent(string agentName, string result, string? failReason = null, bool? examined = null)
+        {
+            if (_disposed) return;
+            if (string.IsNullOrWhiteSpace(agentName)) return;
+            var effectiveThreadId = TryGetEffectiveThreadIdForModelTraffic();
+            if (effectiveThreadId <= 0) return;
+
+            try
+            {
+                var scopedStoryId = LogScope.CurrentStoryId;
+                _db.UpdateLatestModelResponseResultForAgent(
+                    effectiveThreadId,
+                    agentName.Trim(),
+                    result,
+                    failReason,
+                    examined ?? true,
+                    scopedStoryId.HasValue && scopedStoryId.Value > 0 ? scopedStoryId.Value : null);
             }
             catch
             {

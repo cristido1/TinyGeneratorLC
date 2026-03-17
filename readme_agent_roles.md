@@ -1,5 +1,10 @@
 # Agenti e ruoli (source-of-truth = codice)
 
+## Database In Uso
+
+- Database applicativo corrente: `data/storage.db`
+- Nota: anche per analisi agenti/ruoli/fallback fare riferimento a questo file.
+
 Questa nota distingue due concetti che nel progetto convivono:
 
 1) **`agents.role` (stringa)**: ruolo operativo di un agente (es. `writer`, `response_checker`, `log_analyzer`). È usato a runtime per scegliere comportamenti/validator/fallback.

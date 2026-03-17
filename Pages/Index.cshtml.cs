@@ -92,6 +92,12 @@ public class IndexModel : PageModel
 
     public string GetKpiTooltip(string code, string label)
     {
+        var extendedTooltip = ResolveExtendedKpiTooltip(code);
+        if (!string.IsNullOrWhiteSpace(extendedTooltip))
+        {
+            return extendedTooltip;
+        }
+
         return code switch
         {
             "KPI_01" => "Conta quante storie esistono adesso in archivio, includendo sia quelle attive sia quelle segnate come eliminate, prendendo i dati dalla tabella stories.",
@@ -125,6 +131,16 @@ public class IndexModel : PageModel
             "KPI_30" => "Percentuale di test passati sul totale test eseguiti, usando i risultati registrati in model_test_runs.",
             "KPI_31" => "Durata media dei test: prende la media dei tempi registrati nei test e la mostra in ore, minuti e secondi.",
             _ => $"Indicatore {label}: è calcolato sui dati disponibili nel database per misurare l'andamento operativo corrente."
+        };
+    }
+
+    // Tooltip dedicato per KPI aggiunti fuori dal blocco switch storico.
+    private static string ResolveExtendedKpiTooltip(string code)
+    {
+        return code switch
+        {
+            "KPI_32" => "Conta il numero totale di record presenti nella tabella Log, utile per misurare il volume complessivo dei log persistiti nel database.",
+            _ => string.Empty
         };
     }
 
@@ -339,6 +355,14 @@ public class IndexModel : PageModel
                 return Convert.ToInt64(rowsCmd.ExecuteScalar() ?? 0L) > 0;
             }
 
+            bool TableExists(string tableName)
+            {
+                using var existsCmd = conn.CreateCommand();
+                existsCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@name;";
+                existsCmd.Parameters.AddWithValue("@name", tableName);
+                return Convert.ToInt64(existsCmd.ExecuteScalar() ?? 0L) > 0;
+            }
+
             long ScalarLong(string sql)
             {
                 using var cmd = conn.CreateCommand();
@@ -476,6 +500,12 @@ SELECT AVG(cnt) FROM (
                 var avgTestDuration = ScalarDoubleNullable("SELECT AVG(duration_ms) FROM model_test_runs;") ?? 0.0;
                 cards.Add(new KpiCard { Code = "KPI_30", Label = "Test Run Pass Rate", Value = $"{passRate:F1}%" });
                 cards.Add(new KpiCard { Code = "KPI_31", Label = "Durata Media Test", Value = FormatDurationFromMilliseconds(avgTestDuration) });
+            }
+
+            if (TableExists("Log"))
+            {
+                var totalLogRows = ScalarLong("SELECT COUNT(*) FROM Log;");
+                cards.Add(new KpiCard { Code = "KPI_32", Label = "Record Log", Value = totalLogRows.ToString("N0") });
             }
 
             if (HasRows("stories"))

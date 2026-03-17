@@ -180,7 +180,10 @@
                         render: function (v) {
                             var res = String(v || '').trim().toUpperCase();
                             if (!res) return '<span class="text-muted">-</span>';
-                            var badge = res === 'SUCCESS' ? 'bg-success' : (res === 'FAILED' ? 'bg-warning text-dark' : 'bg-secondary');
+                            var badge =
+                                res === 'SUCCESS' ? 'bg-success' :
+                                (res === 'FAILED' ? 'bg-warning text-dark' :
+                                (res === 'ERROR' ? 'bg-danger' : 'bg-secondary'));
                             return '<span class="badge ' + badge + '">' + res + '</span>';
                         }
                     },

@@ -83,7 +83,8 @@ namespace TinyGenerator.Services
         private readonly SemaphoreSlim _queueSemaphore = new(0);
         private readonly int _parallelism;
         private readonly SemaphoreSlim _queueConfiguredSemaphore;
-        private readonly SemaphoreSlim _monomodelQueueSemaphore = new(2, 2);
+        private readonly SemaphoreSlim _monomodelQueueSemaphore = new(4, 4);
+        private readonly object _vllmAdmissionLock = new();
         private readonly ICustomLogger? _logger;
         private readonly Microsoft.AspNetCore.SignalR.IHubContext<TinyGenerator.Hubs.ProgressHub>? _hubContext;
         private readonly NumeratorService? _numerator;
@@ -100,10 +101,12 @@ namespace TinyGenerator.Services
         private readonly ConcurrentDictionary<string, CancellationTokenSource> _commandCancellations = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Task> _batchExecutions = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<long, SemaphoreSlim> _batchStoryLocks = new();
+        private readonly ConcurrentDictionary<long, int> _runningStoryCounts = new();
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _batchOperationSemaphores = new(StringComparer.OrdinalIgnoreCase);
         private readonly SemaphoreSlim _batchGlobalSemaphore;
         private readonly IOptionsMonitor<MonomodelModeOptions>? _monomodelModeOptions;
         private readonly int _maxBatchProcessesPerOperation;
+        private int _vllmRunningSlots;
         private static readonly HashSet<string> ExternalBatchStoryOperations = new(StringComparer.OrdinalIgnoreCase)
         {
             "generate_ambience_audio",
@@ -379,12 +382,46 @@ namespace TinyGenerator.Services
         {
             if (_monomodelModeOptions?.CurrentValue?.Enabled == true)
             {
+                if (IsMonomodelVllmActive())
+                {
+                    return await AcquireVllmQueueExecutionSlotAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 await _monomodelQueueSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                 return new AsyncReleaseHandle(() => _monomodelQueueSemaphore.Release());
             }
 
             await _queueConfiguredSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             return new AsyncReleaseHandle(() => _queueConfiguredSemaphore.Release());
+        }
+
+        private async ValueTask<IAsyncDisposable> AcquireVllmQueueExecutionSlotAsync(CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var decision = await EvaluateVllmAdmissionAsync(cancellationToken).ConfigureAwait(false);
+                if (decision.Allow && TryReserveVllmSlot(decision.MaxParallel))
+                {
+                    return new AsyncReleaseHandle(ReleaseVllmSlot);
+                }
+
+                if (!string.IsNullOrWhiteSpace(decision.Reason))
+                {
+                    var reason = decision.Reason!;
+                    if (reason.Contains("non healthy", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger?.Log("Error", "Command", $"vLLM admission deferred: {reason}", result: "ERROR");
+                    }
+                    else
+                    {
+                        _logger?.Log("Information", "Command", $"vLLM admission deferred: {reason}");
+                    }
+                }
+
+                await Task.Delay(decision.PollDelayMs, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         private static bool TryGetStoryId(IReadOnlyDictionary<string, string>? metadata, out long storyId)
@@ -401,6 +438,106 @@ namespace TinyGenerator.Services
             }
 
             return long.TryParse(raw, out storyId) && storyId > 0;
+        }
+
+        private bool IsMonomodelVllmActive()
+        {
+            try
+            {
+                if (_monomodelModeOptions?.CurrentValue?.Enabled != true)
+                {
+                    return false;
+                }
+
+                var database = _services.GetService(typeof(DatabaseService)) as DatabaseService;
+                var modelDescription = (_monomodelModeOptions.CurrentValue.ModelDescription ?? string.Empty).Trim();
+                if (database == null || string.IsNullOrWhiteSpace(modelDescription))
+                {
+                    return false;
+                }
+
+                var model = database.ListModels()
+                    .FirstOrDefault(m => string.Equals((m.Name ?? string.Empty).Trim(), modelDescription, StringComparison.OrdinalIgnoreCase));
+                return string.Equals(model?.Provider, "vllm", StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public bool IsVllmMonomodelModeActive()
+        {
+            return IsMonomodelVllmActive();
+        }
+
+        public bool IsMonomodelModeActive()
+        {
+            return _monomodelModeOptions?.CurrentValue?.Enabled == true;
+        }
+
+        public async Task<bool> CanAcceptAdditionalMonomodelWorkAsync(CancellationToken cancellationToken = default)
+        {
+            if (_monomodelModeOptions?.CurrentValue?.Enabled != true)
+            {
+                return false;
+            }
+
+            if (!IsMonomodelVllmActive())
+            {
+                return _monomodelQueueSemaphore.CurrentCount > 0;
+            }
+
+            var decision = await EvaluateVllmAdmissionAsync(cancellationToken).ConfigureAwait(false);
+            return decision.Allow;
+        }
+
+        private Task<(bool Allow, string? Reason, int PollDelayMs, int MaxParallel)> EvaluateVllmAdmissionAsync(CancellationToken cancellationToken)
+        {
+            var optionsMonitor = _services.GetService(typeof(IOptionsMonitor<VllmServerOptions>)) as IOptionsMonitor<VllmServerOptions>;
+            var options = optionsMonitor?.CurrentValue ?? new VllmServerOptions();
+            var maxParallel = Math.Max(1, options.DispatcherMaxParallel);
+            var pollDelay = Math.Max(250, options.DispatcherPollDelayMs);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int runningSlots;
+            lock (_vllmAdmissionLock)
+            {
+                runningSlots = _vllmRunningSlots;
+            }
+
+            if (runningSlots >= maxParallel)
+            {
+                return Task.FromResult((false, $"running_slots={runningSlots} >= max_parallel={maxParallel}", pollDelay, maxParallel));
+            }
+
+            return Task.FromResult((true, (string?)null, pollDelay, maxParallel));
+        }
+
+        private bool TryReserveVllmSlot(int maxParallel)
+        {
+            lock (_vllmAdmissionLock)
+            {
+                if (_vllmRunningSlots >= maxParallel)
+                {
+                    return false;
+                }
+
+                _vllmRunningSlots++;
+                return true;
+            }
+        }
+
+        private void ReleaseVllmSlot()
+        {
+            lock (_vllmAdmissionLock)
+            {
+                if (_vllmRunningSlots > 0)
+                {
+                    _vllmRunningSlots--;
+                }
+            }
         }
 
         private static (string operation, long storyId, string? folder, string runId)? TryBuildBatchWorkerRequest(
@@ -665,7 +802,7 @@ namespace TinyGenerator.Services
         public Task StartAsync(CancellationToken cancellationToken)
         {
             _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var workerCount = Math.Max(_parallelism, 2);
+            var workerCount = Math.Max(_parallelism, 6);
             for (int i = 0; i < workerCount; i++)
             {
                 _workers.Add(Task.Run(() => WorkerLoopAsync(_cts.Token), CancellationToken.None));
@@ -673,7 +810,7 @@ namespace TinyGenerator.Services
             _logger?.Log(
                 "Information",
                 "Command",
-                $"CommandDispatcher avviato con workers={workerCount}; queue_parallelismo_default=1; queue_parallelismo_monomodel=2; queue_parallelismo_configurato={_parallelism}");
+                $"CommandDispatcher avviato con workers={workerCount}; queue_parallelismo_default=1; queue_parallelismo_monomodel_llama=4; queue_parallelismo_monomodel_vllm=dinamico; queue_parallelismo_configurato={_parallelism}");
             return Task.CompletedTask;
         }
 
@@ -701,14 +838,7 @@ namespace TinyGenerator.Services
                 {
                     await _queueSemaphore.WaitAsync(stoppingToken).ConfigureAwait(false);
                     
-                    CommandWorkItem? workItem = null;
-                    lock (_queueLock)
-                    {
-                        if (_queue.TryDequeue(out workItem, out _))
-                        {
-                            // Item dequeued successfully
-                        }
-                    }
+                    var workItem = TryDequeueNextWorkItem();
 
                     if (workItem != null)
                     {
@@ -728,6 +858,13 @@ namespace TinyGenerator.Services
 
         private async Task ProcessWorkItemAsync(CommandWorkItem workItem, CancellationToken stoppingToken)
         {
+            long? runningStoryId = null;
+            if (TryGetStoryId(workItem.Metadata, out var resolvedRunningStoryId) && resolvedRunningStoryId > 0)
+            {
+                runningStoryId = resolvedRunningStoryId;
+                _runningStoryCounts.AddOrUpdate(resolvedRunningStoryId, 1, (_, current) => current + 1);
+            }
+
             var allocatedThreadId = _numerator?.NextThreadId() ?? Environment.CurrentManagedThreadId;
             long? allocatedStoryId = null;
             if (_numerator != null && string.Equals(workItem.OperationName, "create_story", StringComparison.OrdinalIgnoreCase))
@@ -969,6 +1106,19 @@ Completed:
             }
             finally
             {
+                if (runningStoryId.HasValue)
+                {
+                    _runningStoryCounts.AddOrUpdate(
+                        runningStoryId.Value,
+                        0,
+                        (_, current) => Math.Max(0, current - 1));
+
+                    if (_runningStoryCounts.TryGetValue(runningStoryId.Value, out var remaining) && remaining <= 0)
+                    {
+                        _runningStoryCounts.TryRemove(runningStoryId.Value, out _);
+                    }
+                }
+
                 await TryAutoPromoteModelsForRunAsync(workItem, stoppingToken).ConfigureAwait(false);
 
                 // Sposta da _active a _completed per mostrare per 5 minuti
@@ -990,6 +1140,58 @@ Completed:
                 }
                 await BroadcastCommandsAsync().ConfigureAwait(false);
             }
+        }
+
+        private CommandWorkItem? TryDequeueNextWorkItem()
+        {
+            lock (_queueLock)
+            {
+                if (!_queue.TryDequeue(out var first, out _))
+                {
+                    return null;
+                }
+
+                if (!ShouldPreferDifferentStoriesInMonomodel() ||
+                    !_runningStoryCounts.Any() ||
+                    !TryGetStoryId(first.Metadata, out var firstStoryId) ||
+                    !_runningStoryCounts.ContainsKey(firstStoryId))
+                {
+                    return first;
+                }
+
+                var deferred = new List<CommandWorkItem>();
+                CommandWorkItem? selected = null;
+                deferred.Add(first);
+
+                while (_queue.TryDequeue(out var candidate, out _))
+                {
+                    if (!TryGetStoryId(candidate.Metadata, out var candidateStoryId) || !_runningStoryCounts.ContainsKey(candidateStoryId))
+                    {
+                        selected = candidate;
+                        break;
+                    }
+
+                    deferred.Add(candidate);
+                }
+
+                if (selected == null)
+                {
+                    selected = deferred[0];
+                    deferred.RemoveAt(0);
+                }
+
+                foreach (var item in deferred)
+                {
+                    _queue.Enqueue(item, item);
+                }
+
+                return selected;
+            }
+        }
+
+        private bool ShouldPreferDifferentStoriesInMonomodel()
+        {
+            return _monomodelModeOptions?.CurrentValue?.Enabled == true && IsMonomodelVllmActive();
         }
 
         private void UpdateStoryLastErrorStateBestEffort(
@@ -1262,6 +1464,79 @@ Completed:
                 }
                 _ = BroadcastCommandsAsync();
             }
+        }
+
+        public void UpdateMetadata(string runId, IReadOnlyDictionary<string, string>? updates, bool overwriteExisting = true)
+        {
+            if (string.IsNullOrWhiteSpace(runId) || updates == null || updates.Count == 0)
+            {
+                return;
+            }
+
+            if (!_active.TryGetValue(runId, out var state) && !_completed.TryGetValue(runId, out state))
+            {
+                return;
+            }
+
+            var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (state.Metadata != null)
+            {
+                foreach (var kv in state.Metadata)
+                {
+                    if (!string.IsNullOrWhiteSpace(kv.Key))
+                    {
+                        merged[kv.Key] = kv.Value;
+                    }
+                }
+            }
+
+            foreach (var kv in updates)
+            {
+                if (string.IsNullOrWhiteSpace(kv.Key))
+                {
+                    continue;
+                }
+
+                if (overwriteExisting || !merged.ContainsKey(kv.Key))
+                {
+                    merged[kv.Key] = kv.Value;
+                }
+            }
+
+            var hadStoryId = TryGetStoryId(state.Metadata, out var previousStoryId) && previousStoryId > 0;
+            var hasStoryId = TryGetStoryId(merged, out var newStoryId) && newStoryId > 0;
+
+            state.Metadata = merged;
+
+            if (IsRunningCommandStatus(state.Status))
+            {
+                if (hadStoryId && hasStoryId && previousStoryId != newStoryId)
+                {
+                    _runningStoryCounts.AddOrUpdate(previousStoryId, 0, (_, current) => Math.Max(0, current - 1));
+                    if (_runningStoryCounts.TryGetValue(previousStoryId, out var remaining) && remaining <= 0)
+                    {
+                        _runningStoryCounts.TryRemove(previousStoryId, out _);
+                    }
+                }
+
+                if ((!hadStoryId || previousStoryId != newStoryId) && hasStoryId)
+                {
+                    _runningStoryCounts.AddOrUpdate(newStoryId, 1, (_, current) => current + 1);
+                }
+            }
+
+            _ = BroadcastCommandsAsync();
+        }
+
+        private static bool IsRunningCommandStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return false;
+            }
+
+            return string.Equals(status, "running", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(status, "batch_running", StringComparison.OrdinalIgnoreCase);
         }
 
         public bool CancelCommand(string runId)

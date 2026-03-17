@@ -145,7 +145,8 @@ public sealed partial class StoriesService
                 var autolaunchTtsAudio = _service._audioGenerationOptions?.CurrentValue?.Tts?.AutolaunchNextCommand
                     ?? _service._ttsSchemaOptions?.CurrentValue?.AutolaunchNextCommand
                     ?? true;
-                if (allowNext && autolaunchTtsAudio)
+                var runningInStatusChain = _service.IsCurrentDispatcherRunStatusChain();
+                if (allowNext && autolaunchTtsAudio && !runningInStatusChain)
                 {
                     try
                     {
@@ -159,6 +160,10 @@ public sealed partial class StoriesService
                 else if (!allowNext)
                 {
                     _service._logger?.LogInformation("TTS schema autolaunch skipped due to delete_next_items for story {StoryId}", story.Id);
+                }
+                else if (runningInStatusChain)
+                {
+                    _service._logger?.LogInformation("TTS schema autolaunch skipped in status_chain for story {StoryId}", story.Id);
                 }
                 else
                 {

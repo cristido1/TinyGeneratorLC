@@ -13,6 +13,28 @@ public sealed class DefaultDeterministicValidator : IDeterministicValidator
         var checks = context?.DeterministicChecks ?? Array.Empty<IDeterministicCheck>();
         var previousNormalizedResponse = context?.PreviousNormalizedResponse;
 
+        var jsonSchemaCheck = checks.FirstOrDefault(c => c is JsonSchemaResponseFormatCheck);
+        if (jsonSchemaCheck != null)
+        {
+            var jsonSchemaResult = jsonSchemaCheck.Execute(output);
+            if (!jsonSchemaResult.Successed)
+            {
+                var reason = BuildDeterministicFailureReason(jsonSchemaCheck, jsonSchemaResult);
+                return new DeterministicValidatorResult
+                {
+                    IsValid = false,
+                    FailureReason = reason,
+                    Violations = new List<string> { reason }
+                };
+            }
+
+            if (jsonSchemaResult is JsonSchemaDeterministicResult jsonFixResult &&
+                !string.IsNullOrWhiteSpace(jsonFixResult.CorrectedText))
+            {
+                output = jsonFixResult.CorrectedText.Trim();
+            }
+        }
+
         var nonEmptyCheck = new NonEmptyResponseCheck();
         var nonEmptyResult = nonEmptyCheck.Execute(output);
         if (!nonEmptyResult.Successed)
@@ -42,6 +64,8 @@ public sealed class DefaultDeterministicValidator : IDeterministicValidator
         foreach (var check in checks)
         {
             if (check == null) continue;
+            if (ReferenceEquals(check, jsonSchemaCheck)) continue;
+
             var result = check.Execute(output);
             if (!result.Successed)
             {

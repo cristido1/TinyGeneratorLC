@@ -35,6 +35,7 @@
         <select asp-for="Model.Provider" class="form-select">
             <option value="ollama">ollama</option>
             <option value="llama.cpp">llama.cpp</option>
+            <option value="vllm">vllm</option>
             <option value="openai">openai</option>
         </select>
         <span asp-validation-for="Model.Provider" class="text-danger"></span>

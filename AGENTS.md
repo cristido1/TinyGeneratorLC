@@ -28,6 +28,9 @@
 - Se la modifica può impattare struttura/responsabilità/flusso del `CallCenter`, chiedi conferma esplicita all'utente prima di procedere.
 - Tutte le chiamate agli agenti devono passare obbligatoriamente dal CallCenter.
 - Tutti i controlli di validità (deterministici o di altra natura) devono essere passati al CallCenter: non implementare validazioni direttamente nei comandi.
+- Error attribution obbligatorio: quando un controllo fallisce (checker/deterministico/validazione), scrivere il `fail_reason` sul record di log della request/agente controllato, non sul record del controllo stesso.
+- Obiettivo diagnostico primario: identificare quale response/request e' fallita; non e' rilevante chi ha segnalato l'errore.
+- Promemoria vincolante: qualsiasi modifica al `CallCenter` richiede sempre conferma esplicita dell'utente prima di procedere.
 
 ## Build
 - Non creare cartelle di output custom che iniziano con `artifact` (es. `artifacts_build`, `artifacts_obj`, ecc.).
@@ -72,3 +75,4 @@
 - La decisione finale resta dell'utente: una volta presa, eseguila senza discussioni ulteriori.
 - Evita esecuzione cieca degli ordini quando emergono rischi evidenti, regressioni o incoerenze con i vincoli del progetto.
 - Non usare soluzioni di ripiego "facili" per aggirare il problema tecnico richiesto. Se la soluzione corretta e' bloccata, incerta o comporta tradeoff rilevanti, fermati e chiedi esplicitamente all'utente come procedere.
+- Non modificare la logica del programma per iniziativa autonoma "perche sembra sbagliata": limitarsi alle modifiche richieste esplicitamente dall'utente.

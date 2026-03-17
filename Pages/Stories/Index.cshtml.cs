@@ -80,6 +80,10 @@ namespace TinyGenerator.Pages.Stories
         public List<Agent> ActionEvaluators { get; set; } = new List<Agent>();
         public List<StoryStatus> Statuses { get; set; } = new List<StoryStatus>();
         public IReadOnlyList<CommandSnapshot> ActiveCommands { get; set; } = Array.Empty<CommandSnapshot>();
+        public HashSet<long> RunningStoryIds { get; private set; } = new();
+
+        public bool IsStoryRunning(long storyId)
+            => storyId > 0 && RunningStoryIds.Contains(storyId);
 
         public void OnGet()
         {
@@ -1967,6 +1971,79 @@ $@"<!doctype html>
 
             // Snapshot of queued/running commands
             ActiveCommands = _commandDispatcher.GetActiveCommands();
+            RunningStoryIds = ExtractRunningStoryIds(ActiveCommands);
+        }
+
+        private static HashSet<long> ExtractRunningStoryIds(IEnumerable<CommandSnapshot>? commands)
+        {
+            var result = new HashSet<long>();
+            if (commands == null)
+            {
+                return result;
+            }
+
+            foreach (var cmd in commands)
+            {
+                if (cmd == null || !IsRunningStatus(cmd.Status))
+                {
+                    continue;
+                }
+
+                if (TryGetStoryIdFromMetadata(cmd.Metadata, out var storyId) && storyId > 0)
+                {
+                    result.Add(storyId);
+                }
+            }
+
+            return result;
+        }
+
+        private static bool IsRunningStatus(string? status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                return false;
+            }
+
+            return status.Equals("running", StringComparison.OrdinalIgnoreCase)
+                   || status.Equals("batch_running", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryGetStoryIdFromMetadata(IReadOnlyDictionary<string, string>? metadata, out long storyId)
+        {
+            storyId = 0;
+            if (metadata == null)
+            {
+                return false;
+            }
+
+            if (TryParsePositiveLong(metadata, "storyId", out storyId))
+            {
+                return true;
+            }
+
+            if (TryParsePositiveLong(metadata, "sourceStoryId", out storyId))
+            {
+                return true;
+            }
+
+            if (TryParsePositiveLong(metadata, "entityId", out storyId))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryParsePositiveLong(IReadOnlyDictionary<string, string> metadata, string key, out long value)
+        {
+            value = 0;
+            if (!metadata.TryGetValue(key, out var raw) || string.IsNullOrWhiteSpace(raw))
+            {
+                return false;
+            }
+
+            return long.TryParse(raw, out value) && value > 0;
         }
 
         private string QueueStoryCommand(long storyId, string operationCode, Func<CommandContext, Task<CommandResult>> operation, string? startMessage = null, string? threadScopeOverride = null, IReadOnlyDictionary<string, string>? metadata = null, bool batch = false)

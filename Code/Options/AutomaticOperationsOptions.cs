@@ -5,6 +5,7 @@ namespace TinyGenerator.Services
         public bool Enabled { get; set; } = true;
         public int IdleSeconds { get; set; } = 60;
         public string AutoAdvancementMode { get; set; } = "series";
+        public int AutoAdvancementBurstPerPoll { get; set; } = 1;
 
         public AutomaticOperationOptions ReviseAndEvaluate { get; set; } = new()
         {
@@ -74,6 +75,7 @@ namespace TinyGenerator.Services
         public int TargetMinutes { get; set; } = 30;
         public int WordsPerMinute { get; set; } = 150;
         public int WriterAgentId { get; set; } = 0;
+        public int TargetQueuedCommands { get; set; } = 1;
     }
 
     public sealed class AutoCompleteAudioPipelineOptions : AutomaticOperationOptions
@@ -85,5 +87,6 @@ namespace TinyGenerator.Services
     {
         public int IntervalMinutes { get; set; } = 20;
         public int MaxSteps { get; set; } = 15;
+        public int TargetQueuedCommands { get; set; } = 1;
     }
 }

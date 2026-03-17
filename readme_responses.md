@@ -2,6 +2,15 @@
 
 Questa nota descrive come TinyGenerator gestisce **output LLM** e **validazione**.
 
+## Policy Messaggi CallCenter (obbligatoria)
+
+Per tutte le chiamate agente via `CallCenter`:
+- Il messaggio `system` contiene solo:
+  - instruction statiche dell'agente (`agents.instructions`, fallback `agents.prompt`);
+  - riepilogo dei primi **N** errori storici piu frequenti del modello/ruolo/agente (attuale: `N=10`).
+- I dettagli specifici della singola richiesta (vincoli runtime, obiettivo del task corrente, contesto operativo dinamico) devono stare in messaggi `user`, non nel `system`.
+- In runtime, se e' presente un contesto richiesta aggiuntivo, il `CallCenter` lo inietta come messaggio `user` con prefisso `[CALLCENTER_REQUEST_CONTEXT]`.
+
 Policy di progetto (runtime):
 - Le risposte degli agenti devono essere strutturate con TAG tra parentesi quadre (es. `[IS_VALID]true[/IS_VALID]`).
 - Non richiediamo JSON agli agenti.

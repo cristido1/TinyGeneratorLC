@@ -51,6 +51,14 @@ namespace TinyGenerator.Services
             IntervalMinutes = 20,
             MaxSteps = 15
         };
+
+        public AutoVaticanHorrorStoryGenerationOptions AutoVaticanHorrorStoryGeneration { get; set; } = new()
+        {
+            Enabled = false,
+            Priority = 7,
+            IntervalMinutes = 20,
+            MaxSteps = 20
+        };
     }
 
     public class AutomaticOperationOptions
@@ -87,6 +95,13 @@ namespace TinyGenerator.Services
     {
         public int IntervalMinutes { get; set; } = 20;
         public int MaxSteps { get; set; } = 15;
+        public int TargetQueuedCommands { get; set; } = 1;
+    }
+
+    public sealed class AutoVaticanHorrorStoryGenerationOptions : AutomaticOperationOptions
+    {
+        public int IntervalMinutes { get; set; } = 20;
+        public int MaxSteps { get; set; } = 20;
         public int TargetQueuedCommands { get; set; } = 1;
     }
 }

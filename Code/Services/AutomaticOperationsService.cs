@@ -47,6 +47,7 @@ namespace TinyGenerator.Services
         private DateTime _lastAttemptUtc;
         private DateTime _lastAutoSeriesEpisodeAttemptUtc;
         private DateTime _lastAutoNreStoryAttemptUtc;
+        private DateTime _lastAutoVaticanHorrorAttemptUtc;
         private int _lastAutoSeriesId;
         private int _lastTaskIndex = -1;
         private bool _idleAttempted;
@@ -92,6 +93,7 @@ namespace TinyGenerator.Services
             _lastAttemptUtc = DateTime.UtcNow;
             _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
             _lastAutoNreStoryAttemptUtc = DateTime.MinValue;
+            _lastAutoVaticanHorrorAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
 
             while (!stoppingToken.IsCancellationRequested)
@@ -109,7 +111,8 @@ namespace TinyGenerator.Services
                     DrainAutoCompleteDeferredFailures();
                     TryRunSelectedAutoAdvancement(opts);
 
-                    if (TryRunAutoCompleteBacklogImmediate(opts))
+                    var mode = NormalizeAutoAdvancementMode(opts.AutoAdvancementMode);
+                    if (mode != "complete_existing_first" && TryRunAutoCompleteBacklogImmediate(opts))
                     {
                         _lastActivityUtc = DateTime.UtcNow;
                         _idleAttempted = false;
@@ -220,6 +223,7 @@ namespace TinyGenerator.Services
             _lastAttemptUtc = DateTime.UtcNow;
             _lastAutoSeriesEpisodeAttemptUtc = DateTime.MinValue;
             _lastAutoNreStoryAttemptUtc = DateTime.MinValue;
+            _lastAutoVaticanHorrorAttemptUtc = DateTime.MinValue;
             _idleAttempted = false;
             _autoCompleteDeferredStoryIds.Clear();
             _logger.LogInformation("AutomaticOperationsService {State} via config reload", _enabled ? "enabled" : "disabled");
@@ -253,16 +257,29 @@ namespace TinyGenerator.Services
                 return;
             }
 
-            if (mode == "complete_existing_first")
+            if (mode == "vatican_horror")
             {
                 for (var i = 0; i < burst; i++)
                 {
-                    // Priority: complete existing backlog first.
-                    if (TryRunAutoCompleteBacklogImmediate(opts))
+                    if (!TryRunAutoVaticanHorrorStoryGeneration(opts))
                     {
-                        continue;
+                        break;
                     }
+                }
+                return;
+            }
 
+            if (mode == "complete_existing_first")
+            {
+                var (hasCandidates, _) = TryEnqueueCompleteExistingFirstRound(opts);
+                if (hasCandidates)
+                {
+                    return;
+                }
+
+                // No existing evaluated story to advance: fallback to new NRE generation.
+                for (var i = 0; i < burst; i++)
+                {
                     if (!TryRunAutoNreStoryGeneration(opts, useManualMethod: false))
                     {
                         break;
@@ -278,6 +295,90 @@ namespace TinyGenerator.Services
                     break;
                 }
             }
+        }
+
+        private (bool hasCandidates, int enqueuedCount) TryEnqueueCompleteExistingFirstRound(AutomaticOperationsOptions opts)
+        {
+            var enqueuedCount = 0;
+            var hasCandidates = false;
+
+            try
+            {
+                var basePriority = Math.Max(1, opts.AutoCompleteAudioPipeline?.Priority ?? 8);
+                var statuses = _database.ListAllStoryStatuses();
+                var evaluated = statuses.FirstOrDefault(s => string.Equals(s.Code, "evaluated", StringComparison.OrdinalIgnoreCase));
+                var evaluatedStep = evaluated?.Step ?? -1;
+                if (evaluatedStep < 0)
+                {
+                    return (false, 0);
+                }
+
+                var rankedStories = _database.GetStoriesByEvaluation();
+                if (rankedStories == null || rankedStories.Count == 0)
+                {
+                    return (false, 0);
+                }
+
+                foreach (var ranked in rankedStories.OrderByDescending(r => r.AvgScore).ThenBy(r => r.Id))
+                {
+                    var story = _database.GetStoryById(ranked.Id);
+                    if (story == null || story.Deleted)
+                    {
+                        continue;
+                    }
+
+                    if (!story.StatusId.HasValue)
+                    {
+                        continue;
+                    }
+
+                    var status = statuses.FirstOrDefault(s => s.Id == story.StatusId.Value);
+                    if (status == null || status.Step < evaluatedStep)
+                    {
+                        continue;
+                    }
+
+                    var next = _stories.GetNextStatusForStory(story, statuses);
+                    if (next == null)
+                    {
+                        continue;
+                    }
+
+                    hasCandidates = true;
+
+                    if (HasQueuedOrRunningCommandsForStory(story.Id))
+                    {
+                        continue;
+                    }
+
+                    var runId = $"auto_complete_existing_next_{story.Id}_{DateTime.UtcNow:yyyyMMddHHmmssfff}";
+                    _dispatcher.Enqueue(
+                        "auto_complete_existing_next_status",
+                        async ctx =>
+                        {
+                            var (ok, message) = await _stories.ExecuteNextStatusOperationAsync(story.Id, ctx.RunId).ConfigureAwait(false);
+                            return new CommandResult(ok, message ?? (ok ? "Operazione successiva completata." : "Operazione successiva fallita."));
+                        },
+                        runId: runId,
+                        threadScope: $"story/auto_complete_existing/{story.Id}",
+                        metadata: new Dictionary<string, string>
+                        {
+                            ["operation"] = "auto_complete_existing_next_status",
+                            ["trigger"] = "complete_existing_first",
+                            ["storyId"] = story.Id.ToString(),
+                            ["source"] = "auto_complete_existing_round"
+                        },
+                        priority: basePriority);
+
+                    enqueuedCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Complete-existing-first round enqueue failed");
+            }
+
+            return (hasCandidates, enqueuedCount);
         }
 
         private bool TryRunAutoStateDrivenSeriesEpisode(AutomaticOperationsOptions opts)
@@ -361,6 +462,46 @@ namespace TinyGenerator.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Auto NRE story generation check failed inside AutomaticOperationsService");
+                return false;
+            }
+        }
+
+        private bool TryRunAutoVaticanHorrorStoryGeneration(AutomaticOperationsOptions opts)
+        {
+            try
+            {
+                var auto = opts.AutoVaticanHorrorStoryGeneration;
+                if (auto == null || !auto.Enabled)
+                {
+                    return false;
+                }
+
+                var targetQueued = Math.Max(1, auto.TargetQueuedCommands);
+                var currentQueued = CountQueuedOperations("AutoVaticanHorrorStoryGeneration", "auto_vatican_horror_story_generation", "run_nre");
+                if (currentQueued >= targetQueued)
+                {
+                    return false;
+                }
+
+                var interval = TimeSpan.FromMinutes(Math.Max(1, auto.IntervalMinutes));
+                var nowUtc = DateTime.UtcNow;
+                if (currentQueued <= 0 && nowUtc - _lastAutoVaticanHorrorAttemptUtc < interval)
+                {
+                    return false;
+                }
+
+                if (HasPendingStoryAutomationBacklog(opts))
+                {
+                    return false;
+                }
+
+                var enqueued = TryEnqueueAutoVaticanHorrorStoryGeneration(auto);
+                _lastAutoVaticanHorrorAttemptUtc = nowUtc;
+                return enqueued;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Auto Vatican horror story generation check failed inside AutomaticOperationsService");
                 return false;
             }
         }
@@ -1568,6 +1709,78 @@ namespace TinyGenerator.Services
             }
         }
 
+        private bool TryEnqueueAutoVaticanHorrorStoryGeneration(AutoVaticanHorrorStoryGenerationOptions auto)
+        {
+            try
+            {
+                var nreOptions = _nreOptionsMonitor.CurrentValue ?? new NarrativeRuntimeEngineOptions();
+                var runId = Guid.NewGuid().ToString();
+                var priority = Math.Max(1, auto.Priority);
+                var maxSteps = Math.Max(8, auto.MaxSteps <= 0 ? 20 : auto.MaxSteps);
+                var title = BuildAutoVaticanHorrorTitle();
+                var prompt = BuildAutoVaticanHorrorPrompt();
+
+                _customLogger.Start(runId);
+                _customLogger.Append(runId, "🕯️ Auto Vatican Horror: accodata nuova storia horror religiosa.");
+
+                _dispatcher.Enqueue(
+                    "AutoVaticanHorrorStoryGeneration",
+                    async ctx =>
+                    {
+                        var request = new EngineRequest
+                        {
+                            EngineName = nreOptions.EngineName,
+                            Method = string.IsNullOrWhiteSpace(nreOptions.DefaultMethod) ? "state_driven" : nreOptions.DefaultMethod.Trim(),
+                            StructureMode = "standard",
+                            CostSeverity = "high",
+                            CombatIntensity = "normal",
+                            MaxSteps = maxSteps,
+                            SnapshotOnFailure = nreOptions.SnapshotOnFailure,
+                            RunId = ctx.RunId,
+                            UserPrompt = prompt,
+                            ResourceHints = "secret archives, sealed doors, ritual chamber, prayer book, confession ledger, iron keys"
+                        };
+
+                        using var scope = _scopeFactory.CreateScope();
+                        var engine = scope.ServiceProvider.GetRequiredService<NreEngine>();
+                        var runNre = new RunNreCommand(
+                            title: title,
+                            request: request,
+                            database: _database,
+                            engine: engine,
+                            options: Options.Create(nreOptions),
+                            logger: _customLogger,
+                            dispatcher: _dispatcher,
+                            storiesService: _stories,
+                            callCenter: _callCenter);
+
+                        return await runNre.ExecuteAsync(ctx.CancellationToken, ctx.RunId).ConfigureAwait(false);
+                    },
+                    runId: runId,
+                    metadata: new Dictionary<string, string>
+                    {
+                        ["operation"] = "auto_vatican_horror_story_generation",
+                        ["mode"] = "vatican_horror",
+                        ["engine"] = nreOptions.EngineName,
+                        ["method"] = nreOptions.DefaultMethod,
+                        ["maxSteps"] = maxSteps.ToString(),
+                        ["stepCurrent"] = "0",
+                        ["stepMax"] = maxSteps.ToString(),
+                        ["agentName"] = nreOptions.WriterAgentName,
+                        ["language"] = "en",
+                        ["genre"] = "religious_horror"
+                    },
+                    priority: priority);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enqueue automatic Vatican horror story generation");
+                return false;
+            }
+        }
+
         private bool TryEnqueueAutoStateDrivenSeriesEpisode(AutoStateDrivenSeriesEpisodeOptions auto)
         {
             var serie = PickNextSeriesForAutoEpisode();
@@ -1818,6 +2031,80 @@ namespace TinyGenerator.Services
             return 1.0;
         }
 
+        private static string BuildAutoVaticanHorrorTitle()
+        {
+            var titles = new[]
+            {
+                "The Seventh Seal Archive",
+                "The Door Beneath the Vatican",
+                "Rule Three Was Never Meant To Be Broken",
+                "The Confession Vault",
+                "The Silent Register of the Damned"
+            };
+
+            return titles[Random.Shared.Next(titles.Length)];
+        }
+
+        private static string BuildAutoVaticanHorrorPrompt()
+        {
+            return
+@"Write a first-person horror narrative in English, in the style of modern creepypasta set in secret religious institutions.
+
+SETTING:
+Link the story to the Vatican or a secret religious organization (monks, priests, inquisitors, archivists).
+Atmosphere must be dark, ritualistic, ancient.
+Include elements such as:
+- secret archives
+- forbidden rooms
+- sealed doors
+- rituals
+- demonic entities
+- hell or hell-like places
+
+MANDATORY STRUCTURE:
+1) Introduction: the protagonist receives an official assignment.
+2) Rules: the protagonist is given strict instructions (at least 3 rules, this is mandatory).
+3) Routine: the initial job routine is described.
+4) Anomaly: something starts violating the rules.
+5) Temptation: a voice or entity tries to communicate.
+6) Error: the protagonist breaks one rule.
+7) Consequences: horror revelation + punishment.
+8) Ending: unsettling closure, with no full redemption.
+
+MANDATORY THEMES:
+- sin
+- guilt/remorse
+- moral judgment
+- temptation
+- deception (evil pretending to be innocent)
+- loss of faith or spiritual crisis
+
+TONE:
+- serious and realistic
+- no irony
+- escalating psychological tension
+- sober but disturbing descriptions
+
+STYLE:
+- clear sentences, not overly literary
+- progressive pacing (slow burn to climax)
+- avoid over-explaining
+- preserve ambiguity
+
+KEY ELEMENT:
+Rules must look simple but imply deep consequences.
+Rule violation must feel inevitable and psychologically credible.
+
+CONSTRAINTS:
+- length: 1200 to 1800 words
+- avoid obvious clichés and cheap jump scares
+- do not describe monsters explicitly; suggest terror
+- ending must leave a sense of damnation or irreversible consequence
+
+OUTPUT:
+Return only the story. No comments, no headings, no explanations.";
+        }
+
         private static string NormalizeAutoAdvancementMode(string? mode)
         {
             if (string.Equals(mode, "nre", StringComparison.OrdinalIgnoreCase))
@@ -1833,6 +2120,11 @@ namespace TinyGenerator.Services
             if (string.Equals(mode, "complete_existing_first", StringComparison.OrdinalIgnoreCase))
             {
                 return "complete_existing_first";
+            }
+
+            if (string.Equals(mode, "vatican_horror", StringComparison.OrdinalIgnoreCase))
+            {
+                return "vatican_horror";
             }
 
             return "series";

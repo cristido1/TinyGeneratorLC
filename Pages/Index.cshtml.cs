@@ -321,14 +321,18 @@ public class IndexModel : PageModel
                 ? "nre"
                 : (string.Equals(mode, "nre_manual", StringComparison.OrdinalIgnoreCase)
                     ? "nre_manual"
+                    : (string.Equals(mode, "vatican_horror", StringComparison.OrdinalIgnoreCase)
+                        ? "vatican_horror"
                     : (string.Equals(mode, "complete_existing_first", StringComparison.OrdinalIgnoreCase)
                         ? "complete_existing_first"
-                        : "series"));
+                        : "series")));
             TempData["Message"] = enabled
                 ? selectedMode == "nre"
                     ? "Avanzamento automatico abilitato in modalita NRE casuale: in inattivita verra accodata una nuova storia NRE (15 step)."
                     : selectedMode == "nre_manual"
                         ? "Avanzamento automatico abilitato in modalita NRE manuale: le storie generate verranno portate fino a valutazione effettuata."
+                        : selectedMode == "vatican_horror"
+                            ? "Avanzamento automatico abilitato in modalita horror Vaticano: in inattivita verra accodata una nuova storia horror religiosa in inglese."
                         : selectedMode == "complete_existing_first"
                             ? "Avanzamento automatico abilitato in modalita completamento: il sistema prova prima a completare storie esistenti, poi genera nuove storie se non c'e backlog."
                             : "Avanzamento automatico abilitato in modalita Serie: in inattivita verra avanzata una serie."

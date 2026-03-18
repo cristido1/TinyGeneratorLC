@@ -260,6 +260,15 @@
                             <option value="nre_manual">Genera nuova storia NRE manuale (fino a valutazione)</option>
                         }
 
+                        @if (Model.AutoAdvancementMode == "vatican_horror")
+                        {
+                            <option value="vatican_horror" selected>Genera nuova storia horror Vaticano (EN, 1a persona)</option>
+                        }
+                        else
+                        {
+                            <option value="vatican_horror">Genera nuova storia horror Vaticano (EN, 1a persona)</option>
+                        }
+
                         @if (Model.AutoAdvancementMode == "complete_existing_first")
                         {
                             <option value="complete_existing_first" selected>Completa storie esistenti prima di crearne nuove</option>

@@ -2926,9 +2926,10 @@ $@"<!doctype html>
             var story = GetStoryById(storyId);
             if (story == null || story.Deleted) return false;
 
+            var storyFolderPath = EnsureStoryFolder(story);
             var folderName = !string.IsNullOrWhiteSpace(story.Folder)
                 ? story.Folder
-                : new DirectoryInfo(EnsureStoryFolder(story)).Name;
+                : new DirectoryInfo(storyFolderPath).Name;
 
             var basePriority = Math.Max(1, priority);
 
@@ -2977,94 +2978,12 @@ $@"<!doctype html>
                 },
                 basePriority);
 
-            EnqueueIfNotQueued(
-                "normalize_characters",
-                $"normalize_characters_{storyId}_",
-                async _ =>
-                {
-                    var (ok, msg) = await NormalizeCharacterNamesAsync(storyId);
-                    return new CommandResult(ok, ok ? "Nomi personaggi normalizzati." : msg);
-                },
-                basePriority + 1);
-
-            EnqueueIfNotQueued(
-                "assign_voices",
-                $"assign_voices_{storyId}_",
-                async _ =>
-                {
-                    var (ok, msg) = await AssignVoicesAsync(storyId);
-                    return new CommandResult(ok, ok ? "Voci assegnate." : msg);
-                },
-                basePriority + 2);
-
-            EnqueueIfNotQueued(
-                "normalize_sentiments",
-                $"normalize_sentiments_{storyId}_",
-                async _ =>
-                {
-                    var (ok, msg) = await NormalizeSentimentsAsync(storyId);
-                    return new CommandResult(ok, ok ? "Sentimenti normalizzati." : msg);
-                },
-                basePriority + 3);
-
-            var ttsRunId = EnqueueGenerateTtsAudioCommand(storyId, trigger: trigger, priority: basePriority + 4);
-            _ = ttsRunId;
-
-            EnqueueIfNotQueued(
-                "generate_music",
-                $"generate_music_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateMusicForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Generazione musica completata." : err);
-                },
-                basePriority + 5,
-                batch: true);
-
-            if (IsAmbienceGenerationEnabled())
-            {
-                EnqueueIfNotQueued(
-                    "generate_ambience_audio",
-                    $"generate_ambience_audio_{storyId}_",
-                    async ctx =>
-                    {
-                        var (ok, err) = await GenerateAmbienceForStoryAsync(storyId, folderName, ctx.RunId);
-                        return new CommandResult(ok, ok ? "Generazione audio ambientale completata." : err);
-                    },
-                    basePriority + 6,
-                    batch: true);
-            }
-
-            EnqueueIfNotQueued(
-                "generate_fx_audio",
-                $"generate_fx_audio_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateFxForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Generazione effetti sonori completata." : err);
-                },
-                basePriority + 7,
-                batch: true);
-
-            EnqueueIfNotQueued(
-                "mix_final_audio",
-                $"mix_final_audio_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await MixFinalAudioForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Mixaggio audio completato." : err);
-                },
-                basePriority + 8);
-
-            EnqueueIfNotQueued(
-                "generate_story_video",
-                $"generate_story_video_{storyId}_",
-                async ctx =>
-                {
-                    var (ok, err) = await GenerateStoryVideoForStoryAsync(storyId, folderName, ctx.RunId);
-                    return new CommandResult(ok, ok ? "Video con sottotitoli generato." : err);
-                },
-                basePriority + 9);
+            // Avoid pre-enqueueing dependent steps (tts/audio/video) based on a stale schema snapshot:
+            // generate_tts_schema may regenerate or fail and invalidate downstream prerequisites.
+            // Subsequent steps are auto-enqueued only after successful prerequisites.
+            _logger?.LogInformation(
+                "Final mix pipeline queued with gated sequencing for story {StoryId}: generate_tts_schema first, dependent steps deferred to autolaunch.",
+                storyId);
 
             return true;
         }
@@ -13506,6 +13425,11 @@ private static string? SelectMusicFileDeterministic(
         if (normalized == "complete_existing_first")
         {
             return "complete_existing_first";
+        }
+
+        if (normalized == "vatican_horror")
+        {
+            return "vatican_horror";
         }
 
         return "series";

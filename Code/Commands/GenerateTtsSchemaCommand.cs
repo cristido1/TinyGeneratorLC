@@ -31,9 +31,28 @@ public sealed partial class StoriesService
             var story = context.Story;
             var folderPath = context.FolderPath;
 
-            if (string.IsNullOrWhiteSpace(story.StoryTagged))
+            var taggedText = story.StoryTagged;
+            if (string.IsNullOrWhiteSpace(taggedText))
             {
-                return (false, "Il testo taggato della storia e vuoto");
+                var revisedText = story.StoryRevised;
+                if (string.IsNullOrWhiteSpace(revisedText))
+                {
+                    return (false, "Il testo taggato della storia e vuoto: eseguire prima la revisione (story_revised).");
+                }
+
+                taggedText = $"[NARRATORE]{Environment.NewLine}{revisedText.Trim()}";
+                try
+                {
+                    _service._database.UpdateStoryTaggedContent(story.Id, taggedText);
+                }
+                catch
+                {
+                    // best-effort: fallback tagging should not block schema generation
+                }
+
+                _service._logger?.LogWarning(
+                    "StoryTagged vuoto per story {StoryId}: applicato fallback narratore da story_revised prima di generate_tts_schema.",
+                    story.Id);
             }
 
             var deleteCmd = new DeleteTtsSchemaCommand(_service);
@@ -84,7 +103,7 @@ public sealed partial class StoriesService
                     }
                 }
 
-                var schema = generator.GenerateFromStoryText(story.StoryTagged, characters, voiceAssignments);
+                var schema = generator.GenerateFromStoryText(taggedText, characters, voiceAssignments);
                 context.CancellationToken.ThrowIfCancellationRequested();
 
                 if (schema.Timeline.Count == 0)

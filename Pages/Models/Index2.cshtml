@@ -6,9 +6,24 @@
 }
 
 @section Styles {
-    <link rel="stylesheet" href="~/js/vue-roles/roles-index.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/js/vue-roles/primeicons.css" asp-append-version="true" />
+    <style>
+        /* PrimeVue DataTable compact overrides */
+        .p-datatable.p-datatable-sm .p-datatable-tbody > tr > td {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.85rem;
+        }
+        .p-datatable.p-datatable-sm .p-datatable-thead > tr > th {
+            padding: 0.3rem 0.5rem;
+            font-size: 0.83rem;
+        }
+        /* Constrain action col */
+        .p-datatable .p-datatable-tbody > tr > td .dropdown-menu {
+            font-size: 0.85rem;
+        }
+    </style>
 }
 
-<div id="roles-vue-app" data-entity="models" data-table-name="models" data-title="@Model.Title"></div>
+<div id="models-index2-app"></div>
 
-<script type="module" src="~/js/vue-roles/roles-index.js" asp-append-version="true"></script>
+<script type="module" src="~/js/vue-roles/models-index2.js" asp-append-version="true"></script>

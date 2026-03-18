@@ -15,6 +15,7 @@ using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
 using ModelInfo = TinyGenerator.Models.ModelInfo;
 // CallRecord model removed - no alias kept
 using TestDefinition = TinyGenerator.Models.TestDefinition;

@@ -4,3 +4,15 @@
 
 
 .roles-detail-subtable-title{display:none}.roles-detail-subtable-error{color:#b91c1c;margin-bottom:.45rem}.roles-detail-subtable .p-datatable{margin-top:0;background:transparent!important}.roles-detail-subtable .p-datatable-table-container,.roles-detail-subtable .p-datatable-table,.roles-detail-subtable .p-datatable-thead>tr>th,.roles-detail-subtable .p-datatable-tbody>tr>td{background:transparent!important}
+
+/* Evidenziazione leggera dei pulsanti nella colonna Azioni */
+.roles-grid-card>.p-datatable .p-datatable-tbody>tr>td:last-child .p-button,
+.roles-detail-subtable .p-datatable-tbody>tr>td:last-child .p-button{
+background:#fff7ed!important;
+border-color:#fed7aa!important;
+}
+.roles-grid-card>.p-datatable .p-datatable-tbody>tr>td:last-child .p-button:hover,
+.roles-detail-subtable .p-datatable-tbody>tr>td:last-child .p-button:hover{
+background:#ffedd5!important;
+border-color:#fdba74!important;
+}

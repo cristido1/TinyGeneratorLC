@@ -420,7 +420,7 @@ ORDER BY name;";
                 {
                     Field = "Status",
                     Op = "neq",
-                    Value = "resolved"
+                    Value = JsonDocument.Parse("\"resolved\"").RootElement.Clone()
                 };
                 if (!TryApplyFilter(query, entityType.ClrType, defaultStatusFilter, out var filtered, out error))
                 {

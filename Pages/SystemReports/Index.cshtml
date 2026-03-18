@@ -48,6 +48,7 @@
 
 <div class="container-fluid px-4">
     <div class="reports-header">
+        <a class="btn btn-sm btn-outline-secondary" asp-page="/SystemReportsErrors/Index">Apri errori aggregati</a>
         <form method="post" asp-page-handler="DeleteAll" class="mb-0">
             <input type="hidden" name="page" value="@Model.PageIndex" />
             <input type="hidden" name="pageSize" value="@Model.PageSize" />

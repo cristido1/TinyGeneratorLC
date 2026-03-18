@@ -332,6 +332,11 @@ namespace TinyGenerator.Services
                         continue;
                     }
 
+                    if (story.AutoTtsFailed)
+                    {
+                        continue;
+                    }
+
                     var status = statuses.FirstOrDefault(s => s.Id == story.StatusId.Value);
                     if (status == null || status.Step < evaluatedStep)
                     {

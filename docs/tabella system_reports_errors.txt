@@ -1,0 +1,243 @@
+OBIETTIVO:
+Implementare un sistema deterministico di aggregazione errori compatibile con le regole progetto (no keyword matching fragile, no AI, no embedding per classificazione primaria).
+
+--------------------------------------------------
+1) MODIFICHE DATABASE
+--------------------------------------------------
+
+ALTER TABLE system_reports ADD:
+- error_id INT NULL
+- extracted BIT NOT NULL DEFAULT 0
+
+--------------------------------------------------
+
+CREATE TABLE system_reports_errors:
+
+- Id INT IDENTITY PRIMARY KEY
+- Fingerprint NVARCHAR(200) NOT NULL UNIQUE
+
+- ErrorType NVARCHAR(100) NOT NULL
+- Agent NVARCHAR(100) NULL
+- Step NVARCHAR(100) NULL
+
+- FailReason NVARCHAR(MAX) NULL
+- ErrorSummary NVARCHAR(MAX) NULL
+
+- Occurrences INT NOT NULL DEFAULT 0
+- FirstSeen DATETIME NOT NULL
+- LastSeen DATETIME NOT NULL
+
+- Status NVARCHAR(20) NOT NULL DEFAULT 'new'
+-- valori ufficiali:
+-- new
+-- candidate_resolved
+-- resolved
+-- ignored
+
+- GitHubIssueId INT NULL
+- FixAppliedVersion NVARCHAR(50) NULL
+
+--------------------------------------------------
+2) PRINCIPIO FONDAMENTALE (VINCOLO PROGETTO)
+--------------------------------------------------
+
+NON usare:
+- ricerca parole libere nel testo italiano
+- contains su frasi
+- parsing fragile
+
+INVECE usare:
+- segnali strutturati già presenti nel log
+- codici check (es: CheckNoDuplicateSentencesAcrossBlocks)
+- prefissi standard (es: GENERIC_ERROR, VALIDATION_ERROR)
+- step e agente
+
+--------------------------------------------------
+3) CLASSIFICAZIONE DETERMINISTICA (NO NLP)
+--------------------------------------------------
+
+Creare funzione:
+
+ResolveErrorType(system_report)
+
+LOGICA:
+
+IF system_report contiene nome check:
+    es: "CheckNoDuplicateSentencesAcrossBlocks"
+THEN
+    ErrorType = "duplicate_sentence"
+
+IF contiene:
+    "CheckDialogueRatioRange"
+THEN
+    ErrorType = "dialogue_ratio_error"
+
+IF contiene errore tecnico pipeline con abort:
+    AND presenza "context" + "overflow" nei metadata tecnici (NON testo libero)
+THEN
+    ErrorType = "context_window_overflow"
+
+IF il sistema segnala input nullo (campo vuoto, non testo):
+THEN
+    ErrorType = "empty_input"
+
+IF validation layer abort senza dati:
+THEN
+    ErrorType = "missing_input"
+
+ALTRIMENTI:
+    ErrorType = "unknown"
+
+NOTA:
+- usare campi strutturati o pattern tecnici, NON testo narrativo
+
+--------------------------------------------------
+4) FINGERPRINT CORRETTO (ANTI OVER-AGGREGAZIONE)
+--------------------------------------------------
+
+NON usare solo:
+ErrorType|Agent|Step
+
+USARE:
+
+Fingerprint = hash(
+    ErrorType
+    + Agent
+    + Step
+    + CheckName (se presente)
+)
+
+CheckName = nome del controllo deterministico (es: CheckNoDuplicateSentencesAcrossBlocks)
+
+Questo evita:
+- unire errori diversi
+- perdere granularità
+
+--------------------------------------------------
+5) PROCESSO DI AGGREGAZIONE
+--------------------------------------------------
+
+ProcessUnextractedErrors()
+
+STEP 1:
+SELECT * FROM system_reports WHERE extracted = 0
+
+STEP 2:
+per ogni record:
+
+- ErrorType = ResolveErrorType(record)
+- CheckName = estratto se presente
+- Fingerprint = calcolato
+
+STEP 3:
+UPSERT su system_reports_errors:
+
+IF esiste Fingerprint:
+    Occurrences += 1
+    LastSeen = now
+
+ELSE:
+    INSERT nuovo record
+
+STEP 4:
+UPDATE system_reports:
+- error_id = Id trovato/creato
+- extracted = 1
+
+REQUISITI:
+- idempotente
+- nessun fuzzy matching
+- nessuna AI
+
+--------------------------------------------------
+6) GESTIONE STATI (COERENTE)
+--------------------------------------------------
+
+STATI VALIDI:
+
+- new
+- candidate_resolved
+- resolved
+- ignored
+
+NOTA:
+- "sent" NON è uno stato
+- è un evento (quando GitHubIssueId viene valorizzato)
+
+--------------------------------------------------
+7) INTEGRAZIONE GITHUB
+--------------------------------------------------
+
+SendToGitHub:
+
+- crea issue
+- salva GitHubIssueId
+- NON cambia stato automaticamente
+
+--------------------------------------------------
+8) UI (COMPLIANT PROGETTO)
+--------------------------------------------------
+
+NON creare pagina custom Vue standalone.
+
+USARE:
+
+- endpoint generico /api/crud/system_reports_errors
+- pagina standard tipo Pages/Shared/Index
+
+--------------------------------------------------
+
+GRID:
+
+- ErrorType
+- Agent
+- Step
+- Occurrences
+- LastSeen
+- Status
+- GitHubIssueId
+
+--------------------------------------------------
+
+FILTRI:
+
+- default: escludere Status = 'resolved'
+- toggle per mostrarli
+
+--------------------------------------------------
+
+AZIONI:
+
+- Extract Errors (chiama processo)
+- Send to GitHub
+- Set candidate_resolved
+- Set resolved
+- Set ignored
+
+--------------------------------------------------
+
+DETTAGLIO:
+
+- FailReason
+- ErrorSummary
+- ultimi system_reports collegati
+
+--------------------------------------------------
+9) REGOLE CRITICHE
+--------------------------------------------------
+
+- NO keyword matching fragile su italiano
+- NO embedding per classificazione primaria
+- NO agenti intelligenti per clustering
+- SI determinismo totale
+- SI coerenza nel tempo
+
+--------------------------------------------------
+RISULTATO ATTESO
+--------------------------------------------------
+
+Sistema stabile che:
+- raggruppa errori in modo coerente
+- evita duplicati
+- mantiene storico
+- permette fix sistemici

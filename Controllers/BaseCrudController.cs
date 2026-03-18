@@ -10,6 +10,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using System.Data;
 using System.Data.Common;
 using System.Text;
+using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -405,6 +406,30 @@ ORDER BY name;";
         var metadataFieldOverrides = LoadMetadataFieldOverrides(metadataTable?.TableId);
         var metadataCommands = LoadMetadataCommands(metadataTable?.TableId, viewType: "grid");
 
+        // Default project behavior for aggregated system report errors:
+        // hide resolved items unless caller explicitly filters by status.
+        var tableNameNormalized = (entityType.GetTableName() ?? string.Empty).Trim().ToLowerInvariant();
+        if (tableNameNormalized == "system_reports_errors")
+        {
+            var hasStatusFilter = (request.Filters ?? Enumerable.Empty<CrudFilter>())
+                .Any(f => string.Equals(f.Field?.Trim(), "status", StringComparison.OrdinalIgnoreCase));
+
+            if (!hasStatusFilter)
+            {
+                var defaultStatusFilter = new CrudFilter
+                {
+                    Field = "Status",
+                    Op = "neq",
+                    Value = "resolved"
+                };
+                if (!TryApplyFilter(query, entityType.ClrType, defaultStatusFilter, out var filtered, out error))
+                {
+                    return BadRequest(new { success = false, error });
+                }
+                query = filtered;
+            }
+        }
+
         foreach (var filter in request.Filters ?? Enumerable.Empty<CrudFilter>())
         {
             if (!TryApplyFilter(query, entityType.ClrType, filter, out var filtered, out error))
@@ -794,6 +819,11 @@ ORDER BY name;";
             return await ExecuteModelsMetadataCommandAsync(code, request).ConfigureAwait(false);
         }
 
+        if (table == "system_reports_errors")
+        {
+            return await ExecuteSystemReportsErrorsMetadataCommandAsync(code, request).ConfigureAwait(false);
+        }
+
         throw new InvalidOperationException($"Comando '{commandCode}' non supportato per tabella '{tableName}'.");
     }
 
@@ -931,6 +961,149 @@ ORDER BY name;";
             default:
                 throw new InvalidOperationException($"Comando models non supportato: '{commandCode}'.");
         }
+    }
+
+    private async Task<CrudCommandExecutionResult> ExecuteSystemReportsErrorsMetadataCommandAsync(string commandCode, CrudCommandExecuteRequest request)
+    {
+        switch (commandCode)
+        {
+            case "system_reports_errors_extract":
+            {
+                var result = _database.ProcessUnextractedErrors();
+                return new CrudCommandExecutionResult(
+                    $"Extract completato: scanned={result.Scanned}, linked={result.Linked}, inserted={result.Inserted}, updated={result.Updated}, unknown={result.UnknownType}.");
+            }
+            case "system_reports_errors_set_candidate_resolved":
+            case "system_reports_errors_set_resolved":
+            case "system_reports_errors_set_ignored":
+            {
+                if (request.RowId is null or <= 0)
+                {
+                    throw new InvalidOperationException("RowId obbligatorio per aggiornare lo stato.");
+                }
+
+                var status = commandCode switch
+                {
+                    "system_reports_errors_set_candidate_resolved" => "candidate_resolved",
+                    "system_reports_errors_set_resolved" => "resolved",
+                    "system_reports_errors_set_ignored" => "ignored",
+                    _ => throw new InvalidOperationException($"Comando non supportato: {commandCode}")
+                };
+
+                var ok = _database.UpdateSystemReportErrorStatus(request.RowId.Value, status);
+                if (!ok)
+                {
+                    throw new InvalidOperationException("Aggiornamento stato non riuscito.");
+                }
+
+                return new CrudCommandExecutionResult($"Stato aggiornato a '{status}'.");
+            }
+            case "system_reports_errors_send_to_github":
+            {
+                if (request.RowId is null or <= 0)
+                {
+                    throw new InvalidOperationException("RowId obbligatorio per l'invio a GitHub.");
+                }
+
+                var rowId = request.RowId.Value;
+                var errorRow = await _db.SystemReportsErrors
+                    .FirstOrDefaultAsync(x => x.Id == rowId)
+                    .ConfigureAwait(false);
+
+                if (errorRow == null)
+                {
+                    throw new InvalidOperationException($"Errore aggregato non trovato: id={rowId}");
+                }
+
+                if (errorRow.GitHubIssueId.HasValue && errorRow.GitHubIssueId.Value > 0)
+                {
+                    return new CrudCommandExecutionResult($"Issue GitHub già presente: #{errorRow.GitHubIssueId.Value}");
+                }
+
+                var linkedReports = await _db.SystemReports
+                    .AsNoTracking()
+                    .CountAsync(x => x.ErrorId == rowId)
+                    .ConfigureAwait(false);
+
+                var issueNumber = await CreateGitHubIssueForSystemReportErrorAsync(errorRow, linkedReports).ConfigureAwait(false);
+                errorRow.GitHubIssueId = issueNumber;
+                await _db.SaveChangesAsync().ConfigureAwait(false);
+
+                return new CrudCommandExecutionResult($"Issue GitHub creata: #{issueNumber}");
+            }
+            default:
+                throw new InvalidOperationException($"Comando system_reports_errors non supportato: '{commandCode}'.");
+        }
+    }
+
+    private static async Task<int> CreateGitHubIssueForSystemReportErrorAsync(SystemReportError row, int linkedReports)
+    {
+        var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN")?.Trim();
+        var owner = Environment.GetEnvironmentVariable("GITHUB_OWNER")?.Trim();
+        var repo = Environment.GetEnvironmentVariable("GITHUB_REPO")?.Trim();
+
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
+        {
+            throw new InvalidOperationException("Configurazione GitHub mancante. Servono GITHUB_TOKEN, GITHUB_OWNER e GITHUB_REPO.");
+        }
+
+        var title = $"[SystemReportError] {row.ErrorType} ({row.Agent ?? "n/a"} / {row.Step ?? "n/a"})";
+        var body = new StringBuilder();
+        body.AppendLine("## Aggregated Error");
+        body.AppendLine();
+        body.AppendLine($"- ErrorType: `{row.ErrorType}`");
+        body.AppendLine($"- Agent: `{row.Agent ?? "n/a"}`");
+        body.AppendLine($"- Step: `{row.Step ?? "n/a"}`");
+        body.AppendLine($"- CheckName: `{row.CheckName ?? "n/a"}`");
+        body.AppendLine($"- Occurrences: `{row.Occurrences}`");
+        body.AppendLine($"- Linked system_reports: `{linkedReports}`");
+        body.AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(row.ErrorSummary))
+        {
+            body.AppendLine("### Summary");
+            body.AppendLine(row.ErrorSummary.Trim());
+            body.AppendLine();
+        }
+
+        if (!string.IsNullOrWhiteSpace(row.FailReason))
+        {
+            body.AppendLine("### First FailReason");
+            body.AppendLine("```text");
+            body.AppendLine(row.FailReason.Trim());
+            body.AppendLine("```");
+        }
+
+        var payload = new
+        {
+            title,
+            body = body.ToString(),
+            labels = new[] { "system-report", "bug" }
+        };
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("TinyGeneratorLC-SystemReports");
+        http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+
+        var response = await http.PostAsync(
+            $"https://api.github.com/repos/{owner}/{repo}/issues",
+            new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")).ConfigureAwait(false);
+
+        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"GitHub issue create failed: {(int)response.StatusCode} {response.ReasonPhrase} - {json}");
+        }
+
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("number", out var numberEl) || !numberEl.TryGetInt32(out var issueNumber) || issueNumber <= 0)
+        {
+            throw new InvalidOperationException("Risposta GitHub priva di issue number valido.");
+        }
+
+        return issueNumber;
     }
 
     private string ResolveEnabledModelName(CrudCommandExecuteRequest request)

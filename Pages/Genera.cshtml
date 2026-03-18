@@ -275,6 +275,9 @@
             <button type="button" id="suggestNreMilitaryPromptBtn" class="action-btn" style="font-weight:600; padding:8px 14px">
                 Suggerisci militare (flotta italiana)
             </button>
+            <button type="button" id="suggestNreReligiousPromptBtn" class="action-btn" style="font-weight:600; padding:8px 14px">
+                Suggerisci religioso (Vaticano horror)
+            </button>
             <button type="button" id="startNreBtn" class="action-btn primary" style="font-weight:600; padding:8px 14px">Avvia NRE</button>
             <span style="font-size:0.85em; color:#5d7387;">Versione iniziale collegata a planner/writer/evaluator via CallCenter.</span>
         </div>
@@ -604,6 +607,7 @@
     const startNreBtn = document.getElementById('startNreBtn');
     const suggestNrePromptBtn = document.getElementById('suggestNrePromptBtn');
     const suggestNreMilitaryPromptBtn = document.getElementById('suggestNreMilitaryPromptBtn');
+    const suggestNreReligiousPromptBtn = document.getElementById('suggestNreReligiousPromptBtn');
     const suggestNrePromptSpinner = document.getElementById('suggestNrePromptSpinner');
     const suggestNrePromptBtnText = document.getElementById('suggestNrePromptBtnText');
     const nreError = document.getElementById('nreError');
@@ -683,6 +687,14 @@
         });
     }
 
+    if (suggestNreReligiousPromptBtn) {
+        suggestNreReligiousPromptBtn.addEventListener('click', async () => {
+            await requestNreSuggestion(
+                '?handler=StartNrePromptSuggestionReligiousVatican',
+                '🕯️ Richiesta suggerimento NRE religioso (Vaticano horror)...');
+        });
+    }
+
     async function requestNreSuggestion(url, startMessage) {
         if (nreError) {
             nreError.textContent = '';
@@ -727,6 +739,11 @@
             suggestNreMilitaryPromptBtn.disabled = !!isLoading;
             suggestNreMilitaryPromptBtn.style.opacity = isLoading ? '0.75' : '';
             suggestNreMilitaryPromptBtn.style.cursor = isLoading ? 'wait' : '';
+        }
+        if (suggestNreReligiousPromptBtn) {
+            suggestNreReligiousPromptBtn.disabled = !!isLoading;
+            suggestNreReligiousPromptBtn.style.opacity = isLoading ? '0.75' : '';
+            suggestNreReligiousPromptBtn.style.cursor = isLoading ? 'wait' : '';
         }
         if (suggestNrePromptSpinner) {
             suggestNrePromptSpinner.style.display = isLoading ? 'inline-block' : 'none';

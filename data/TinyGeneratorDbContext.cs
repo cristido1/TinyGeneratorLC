@@ -32,6 +32,7 @@ public class TinyGeneratorDbContext : DbContext
     public DbSet<TtsVoice> TtsVoices => Set<TtsVoice>();
     public DbSet<LogEntry> Logs => Set<LogEntry>();
     public DbSet<SystemReport> SystemReports => Set<SystemReport>();
+    public DbSet<SystemReportError> SystemReportsErrors => Set<SystemReportError>();
     public DbSet<Series> Series => Set<Series>();
     public DbSet<SeriesEpisode> SeriesEpisodes => Set<SeriesEpisode>();
     public DbSet<SeriesCharacter> SeriesCharacters => Set<SeriesCharacter>();

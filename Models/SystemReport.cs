@@ -66,6 +66,12 @@ namespace TinyGenerator.Models
 
         [Column("raw_log_ref")]
         public string? RawLogRef { get; set; }
+
+        [Column("error_id")]
+        public int? ErrorId { get; set; }
+
+        [Column("extracted")]
+        public bool Extracted { get; set; }
     }
 }
 

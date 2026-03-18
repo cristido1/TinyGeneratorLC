@@ -1005,6 +1005,46 @@ public class GeneraModel : PageModel
         return new JsonResult(new { id = genId.ToString() });
     }
 
+    public IActionResult OnPostStartNrePromptSuggestionReligiousVatican()
+    {
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "Accodo suggerimento NRE religioso (Vaticano horror)...");
+
+        var baseTheme = "sin, guilt, moral judgment, temptation, deception by evil masked as innocence, crisis of faith";
+        var baseSetting = "Vatican secret archives, forbidden sealed rooms, hidden religious order of monks priests inquisitors archivists, ritual ancient underground spaces linked to infernal places";
+        var baseGenre = "religious horror, modern creepypasta, psychological dread, secret Vatican conspiracy";
+        var baseTone = "serious realistic voice, first person narrative in English, slow burn escalating tension, restrained but disturbing descriptions";
+        var baseConstraints =
+            "length 1200-1800 words; strict 8-part structure: official assignment, explicit rules with at least 3 rules, routine, anomaly, temptation voice, rule violation, consequences and punishment, unsettling ending without full redemption; avoid explicit monster descriptions and cheap jump scares; output only the story";
+
+        var cmd = new GenerateNrePromptSuggestionCommand(
+            database: _database,
+            callCenter: _callCenter,
+            options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
+            logger: _customLogger,
+            themeHint: baseTheme,
+            settingHint: baseSetting,
+            genreHint: baseGenre,
+            toneHint: baseTone,
+            constraintsHint: baseConstraints,
+            lookupHintTypes: new[] { "THEME_CORE", "SETTING", "CONFLICT", "ANTAGONIST", "TWIST" });
+
+        _dispatcher.Enqueue(
+            cmd,
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "nre_prompt_suggestion_religious_vatican",
+                ["agentName"] = _nreOptions.PromptSuggestionAgentRole,
+                ["mode"] = "batch",
+                ["transparent"] = "1"
+            },
+            priority: 2);
+
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
     private static string BuildNreCompositePrompt(
         string? theme,
         string? setting,

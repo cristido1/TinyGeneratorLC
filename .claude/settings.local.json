@@ -36,7 +36,8 @@
       "Bash(grep -v \"//.*duplicate\")",
       "Bash(MSYS_NO_PATHCONV=1 docker run -d --restart no --name \"tinygenerator-vllm\" --gpus all -p 8000:8000 -v \"C:/vllm_models:/models\" \"vllm/vllm-openai:nightly\" \"/models/Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ\" --tokenizer \"/models/QuantTrio--Qwen3.5-9B-AWQ\" --host 0.0.0.0 --port 8000 --served-model-name \"Vishva007/Qwen3.5-9B-GPTQ\" --gpu-memory-utilization 0.90 --max-model-len 16384 --max-num-seqs 4 --max-num-batched-tokens 4096 --tensor-parallel-size 1 --trust-remote-code --no-enable-log-requests)",
       "Bash(sqlite3 data/storage.db \"SELECT Ts, AgentName, State, Result, ResultFailReason, Message, ThreadScope FROM Log WHERE Ts > datetime\\(''now'', ''-10 hours''\\) ORDER BY Ts DESC LIMIT 50;\")",
-      "Bash(sqlite3 data/storage.db \"SELECT story_id, COUNT\\(*\\) as tentativi, MIN\\(Ts\\) as prima, MAX\\(Ts\\) as ultima FROM Log WHERE AgentName=''Formatter'' AND Result=''FAILED'' AND Ts > datetime\\(''now'', ''-10 hours''\\) GROUP BY story_id ORDER BY tentativi DESC;\")"
+      "Bash(sqlite3 data/storage.db \"SELECT story_id, COUNT\\(*\\) as tentativi, MIN\\(Ts\\) as prima, MAX\\(Ts\\) as ultima FROM Log WHERE AgentName=''Formatter'' AND Result=''FAILED'' AND Ts > datetime\\(''now'', ''-10 hours''\\) GROUP BY story_id ORDER BY tentativi DESC;\")",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

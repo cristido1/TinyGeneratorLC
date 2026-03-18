@@ -8820,6 +8820,155 @@ CREATE TABLE IF NOT EXISTS usage_state (
             Console.WriteLine($"[DB] Warning: unable to create usage_state table: {ex.Message}");
         }
 
+        // Migration: system_reports deterministic error aggregation support
+        try
+        {
+            var hasSystemReportsErrors = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='system_reports_errors'") > 0;
+            if (!hasSystemReportsErrors)
+            {
+                Console.WriteLine("[DB] Migration: creating system_reports_errors table");
+                conn.Execute(@"
+CREATE TABLE IF NOT EXISTS system_reports_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL UNIQUE,
+    error_type TEXT NOT NULL,
+    agent TEXT NULL,
+    step TEXT NULL,
+    check_name TEXT NULL,
+    fail_reason TEXT NULL,
+    error_summary TEXT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    github_issue_id INTEGER NULL,
+    fix_applied_version TEXT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1
+);");
+            }
+
+            var hasErrorId = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('system_reports') WHERE name='error_id'") > 0;
+            if (!hasErrorId)
+            {
+                conn.Execute("ALTER TABLE system_reports ADD COLUMN error_id INTEGER NULL");
+                Console.WriteLine("[DB] Migration: added error_id to system_reports");
+            }
+
+            var hasExtracted = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('system_reports') WHERE name='extracted'") > 0;
+            if (!hasExtracted)
+            {
+                conn.Execute("ALTER TABLE system_reports ADD COLUMN extracted INTEGER NOT NULL DEFAULT 0");
+                Console.WriteLine("[DB] Migration: added extracted to system_reports");
+            }
+
+            var hasCheckName = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('system_reports_errors') WHERE name='check_name'") > 0;
+            if (!hasCheckName)
+            {
+                conn.Execute("ALTER TABLE system_reports_errors ADD COLUMN check_name TEXT NULL");
+                Console.WriteLine("[DB] Migration: added check_name to system_reports_errors");
+            }
+
+            conn.Execute("CREATE INDEX IF NOT EXISTS idx_system_reports_extracted ON system_reports(extracted)");
+            conn.Execute("CREATE INDEX IF NOT EXISTS idx_system_reports_error_id ON system_reports(error_id)");
+            conn.Execute("CREATE INDEX IF NOT EXISTS idx_system_reports_errors_status ON system_reports_errors(status)");
+            conn.Execute("CREATE INDEX IF NOT EXISTS idx_system_reports_errors_last_seen ON system_reports_errors(last_seen DESC)");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to migrate system_reports_errors schema: {ex.Message}");
+        }
+
+        // Migration: metadata + commands for system_reports_errors in shared CRUD page.
+        try
+        {
+            conn.Execute(@"
+INSERT INTO metadata_tables (
+    table_name, default_sort_field, default_sort_direction, default_page_size, edit_mode,
+    allow_insert, allow_update, allow_delete, title, note, icon, ""group"", sort_order
+)
+SELECT
+    'system_reports_errors', 'LastSeen', 'desc', 25, 'dialog',
+    0, 1, 0, 'System Reports Errors',
+    'Aggregazione deterministica errori da system_reports.',
+    'pi pi-bug', 'Monitoring', 210
+WHERE NOT EXISTS (
+    SELECT 1 FROM metadata_tables mt WHERE lower(mt.table_name) = 'system_reports_errors'
+);");
+
+            conn.Execute(@"
+INSERT INTO metadata_tables (
+    table_name, default_sort_field, default_sort_direction, default_page_size, edit_mode,
+    allow_insert, allow_update, allow_delete, title, note, icon, ""group"", sort_order
+)
+SELECT
+    'system_reports', 'Id', 'desc', 25, 'dialog',
+    0, 0, 0, 'System Reports',
+    'Log report sorgenti collegati agli errori aggregati.',
+    'pi pi-list', 'Monitoring', 211
+WHERE NOT EXISTS (
+    SELECT 1 FROM metadata_tables mt WHERE lower(mt.table_name) = 'system_reports'
+);");
+
+            conn.Execute(@"
+UPDATE metadata_tables
+SET child_table_id = (SELECT id FROM metadata_tables WHERE table_name = 'system_reports' LIMIT 1),
+    child_table_parent_id_field_name = 'error_id'
+WHERE table_name = 'system_reports_errors';");
+
+            conn.Execute(@"
+INSERT INTO commands (code, description, icon, is_active, created_at, updated_at)
+SELECT v.code, v.description, v.icon, 1, datetime('now'), datetime('now')
+FROM (
+    SELECT 'system_reports_errors_extract' AS code, 'Extract Errors' AS description, 'pi pi-cog' AS icon
+    UNION ALL SELECT 'system_reports_errors_send_to_github', 'Send to GitHub', 'pi pi-github'
+    UNION ALL SELECT 'system_reports_errors_set_candidate_resolved', 'Set candidate_resolved', 'pi pi-hourglass'
+    UNION ALL SELECT 'system_reports_errors_set_resolved', 'Set resolved', 'pi pi-check-circle'
+    UNION ALL SELECT 'system_reports_errors_set_ignored', 'Set ignored', 'pi pi-eye-slash'
+) v
+WHERE NOT EXISTS (
+    SELECT 1 FROM commands c WHERE lower(c.code) = lower(v.code)
+);");
+
+            conn.Execute(@"
+INSERT INTO metadata_commands (command_id, table_id, view_type, position, visible, enabled, requires_confirm, confirm_message, is_active, created_at, updated_at)
+SELECT c.id, t.id, 'grid', 'header', 1, 1, 0, NULL, 1, datetime('now'), datetime('now')
+FROM commands c
+JOIN metadata_tables t ON t.table_name = 'system_reports_errors'
+WHERE c.code = 'system_reports_errors_extract'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM metadata_commands mc
+      WHERE mc.command_id = c.id
+        AND mc.table_id = t.id
+        AND lower(mc.view_type) = 'grid'
+        AND lower(mc.position) = 'header'
+  );");
+
+            conn.Execute(@"
+INSERT INTO metadata_commands (command_id, table_id, view_type, position, visible, enabled, requires_confirm, confirm_message, is_active, created_at, updated_at)
+SELECT c.id, t.id, 'grid', 'row', 1, 1, 0, NULL, 1, datetime('now'), datetime('now')
+FROM commands c
+JOIN metadata_tables t ON t.table_name = 'system_reports_errors'
+WHERE c.code IN (
+    'system_reports_errors_send_to_github',
+    'system_reports_errors_set_candidate_resolved',
+    'system_reports_errors_set_resolved',
+    'system_reports_errors_set_ignored'
+)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM metadata_commands mc
+      WHERE mc.command_id = c.id
+        AND mc.table_id = t.id
+        AND lower(mc.view_type) = 'grid'
+        AND lower(mc.position) = 'row'
+  );");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to seed metadata commands for system_reports_errors: {ex.Message}");
+        }
+
         // Migration: add story_revised column to stories if missing
         try
         {
@@ -11180,6 +11329,343 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         context.SystemReports.Add(report);
         context.SaveChanges();
         return report;
+    }
+
+    public sealed record ProcessSystemReportErrorsResult(
+        int Scanned,
+        int Linked,
+        int Inserted,
+        int Updated,
+        int UnknownType);
+
+    public ProcessSystemReportErrorsResult ProcessUnextractedErrors(int maxRows = 500)
+    {
+        var scanned = 0;
+        var linked = 0;
+        var inserted = 0;
+        var updated = 0;
+        var unknown = 0;
+
+        maxRows = Math.Clamp(maxRows, 1, 5000);
+        var nowIso = DateTime.UtcNow.ToString("o");
+
+        using var conn = CreateConnection();
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        var rows = conn.Query<SystemReportPendingExtractionRow>(@"
+SELECT
+    id AS Id,
+    title AS Title,
+    message AS Message,
+    failure_reason AS FailureReason,
+    agent_name AS AgentName,
+    agent_role AS AgentRole,
+    operation_type AS OperationType
+FROM system_reports
+WHERE coalesce(deleted, 0) = 0
+  AND coalesce(extracted, 0) = 0
+ORDER BY id
+LIMIT @maxRows;",
+            new { maxRows },
+            tx).ToList();
+
+        foreach (var row in rows)
+        {
+            scanned++;
+
+            var agent = NormalizeToken(string.IsNullOrWhiteSpace(row.AgentRole) ? row.AgentName : row.AgentRole);
+            var step = NormalizeToken(row.OperationType);
+            var checkName = ExtractCheckName(row);
+            var errorCode = ExtractStructuredErrorCode(row);
+            var errorType = ResolveSystemReportErrorType(checkName, errorCode);
+            if (string.Equals(errorType, "unknown", StringComparison.OrdinalIgnoreCase))
+            {
+                unknown++;
+            }
+
+            var fingerprint = BuildSystemReportErrorFingerprint(errorType, agent, step, checkName);
+            var summary = BuildSystemReportErrorSummary(errorType, checkName, step);
+
+            var existing = conn.QueryFirstOrDefault<SystemReportErrorUpsertRow>(@"
+SELECT
+    id AS Id,
+    occurrences AS Occurrences
+FROM system_reports_errors
+WHERE fingerprint = @fingerprint
+LIMIT 1;",
+                new { fingerprint },
+                tx);
+
+            int errorId;
+            if (existing == null)
+            {
+                conn.Execute(@"
+INSERT INTO system_reports_errors (
+    fingerprint, error_type, agent, step, check_name,
+    fail_reason, error_summary, occurrences, first_seen, last_seen,
+    status, github_issue_id, fix_applied_version, is_active
+)
+VALUES (
+    @fingerprint, @errorType, @agent, @step, @checkName,
+    @failReason, @errorSummary, 1, @firstSeen, @lastSeen,
+    'new', NULL, NULL, 1
+);",
+                    new
+                    {
+                        fingerprint,
+                        errorType,
+                        agent,
+                        step,
+                        checkName,
+                        failReason = string.IsNullOrWhiteSpace(row.FailureReason) ? row.Message : row.FailureReason,
+                        errorSummary = summary,
+                        firstSeen = nowIso,
+                        lastSeen = nowIso
+                    },
+                    tx);
+
+                errorId = conn.ExecuteScalar<int>("SELECT CAST(last_insert_rowid() AS INTEGER);", transaction: tx);
+                inserted++;
+            }
+            else
+            {
+                errorId = existing.Id;
+                conn.Execute(@"
+UPDATE system_reports_errors
+SET occurrences = coalesce(occurrences, 0) + 1,
+    last_seen = @lastSeen,
+    check_name = CASE
+        WHEN (check_name IS NULL OR trim(check_name) = '') AND @checkName IS NOT NULL AND trim(@checkName) <> '' THEN @checkName
+        ELSE check_name
+    END
+WHERE id = @id;",
+                    new { id = errorId, lastSeen = nowIso, checkName },
+                    tx);
+                updated++;
+            }
+
+            conn.Execute(@"
+UPDATE system_reports
+SET error_id = @errorId,
+    extracted = 1
+WHERE id = @id;",
+                new { id = row.Id, errorId },
+                tx);
+            linked++;
+        }
+
+        tx.Commit();
+        return new ProcessSystemReportErrorsResult(scanned, linked, inserted, updated, unknown);
+    }
+
+    public IReadOnlyList<SystemReportError> ListSystemReportErrors(bool includeResolved = false, int limit = 500)
+    {
+        limit = Math.Clamp(limit, 1, 5000);
+        using var context = CreateDbContext();
+        var query = context.SystemReportsErrors.AsNoTracking();
+        if (!includeResolved)
+        {
+            query = query.Where(x => x.Status != "resolved");
+        }
+
+        return query
+            .OrderByDescending(x => x.LastSeen)
+            .ThenByDescending(x => x.Id)
+            .Take(limit)
+            .ToList();
+    }
+
+    public bool UpdateSystemReportErrorStatus(int id, string status)
+    {
+        if (id <= 0) return false;
+        var normalized = NormalizeSystemReportErrorStatus(status);
+        if (normalized == null) return false;
+
+        using var conn = CreateConnection();
+        conn.Open();
+        var changed = conn.Execute(@"
+UPDATE system_reports_errors
+SET status = @status
+WHERE id = @id;",
+            new { id, status = normalized });
+        return changed > 0;
+    }
+
+    public bool UpdateSystemReportErrorGitHubIssueId(int id, int githubIssueId)
+    {
+        if (id <= 0 || githubIssueId <= 0) return false;
+        using var conn = CreateConnection();
+        conn.Open();
+        var changed = conn.Execute(@"
+UPDATE system_reports_errors
+SET github_issue_id = @githubIssueId
+WHERE id = @id;",
+            new { id, githubIssueId });
+        return changed > 0;
+    }
+
+    private static string? NormalizeSystemReportErrorStatus(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "new" => "new",
+            "candidate_resolved" => "candidate_resolved",
+            "resolved" => "resolved",
+            "ignored" => "ignored",
+            _ => null
+        };
+    }
+
+    private static string ResolveSystemReportErrorType(string? checkName, string? errorCode)
+    {
+        if (!string.IsNullOrWhiteSpace(checkName))
+        {
+            var check = checkName.Trim();
+            if (string.Equals(check, "CheckNoDuplicateSentencesAcrossBlocks", StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_sentence";
+            }
+            if (string.Equals(check, "CheckDialogueRatioRange", StringComparison.OrdinalIgnoreCase))
+            {
+                return "dialogue_ratio_error";
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(errorCode))
+        {
+            return "unknown";
+        }
+
+        var code = errorCode.Trim().ToUpperInvariant();
+        if (code.Contains("CONTEXT_WINDOW_OVERFLOW", StringComparison.Ordinal) ||
+            code.Contains("CONTEXT_LENGTH_EXCEEDED", StringComparison.Ordinal) ||
+            code.Contains("MAX_MODEL_LEN", StringComparison.Ordinal) ||
+            code.Contains("TRUNCATION", StringComparison.Ordinal))
+        {
+            return "context_window_overflow";
+        }
+
+        if (code.Contains("MISSING_INPUT", StringComparison.Ordinal) ||
+            code.Contains("INPUT_MISSING", StringComparison.Ordinal))
+        {
+            return "missing_input";
+        }
+
+        if (code.Contains("EMPTY_INPUT", StringComparison.Ordinal) ||
+            code.Contains("INPUT_EMPTY", StringComparison.Ordinal))
+        {
+            return "empty_input";
+        }
+
+        if (code.Contains("DUPLICATE_SENTENCE", StringComparison.Ordinal))
+        {
+            return "duplicate_sentence";
+        }
+
+        if (code.Contains("DIALOGUE_RATIO", StringComparison.Ordinal))
+        {
+            return "dialogue_ratio_error";
+        }
+
+        return "unknown";
+    }
+
+    private static string? ExtractCheckName(SystemReportPendingExtractionRow row)
+    {
+        static string? MatchCheckName(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            var match = Regex.Match(text, @"\bCheck[A-Za-z0-9_]+\b", RegexOptions.CultureInvariant);
+            return match.Success ? match.Value.Trim() : null;
+        }
+
+        return MatchCheckName(row.FailureReason)
+            ?? MatchCheckName(row.Message)
+            ?? MatchCheckName(row.Title);
+    }
+
+    private static string? ExtractStructuredErrorCode(SystemReportPendingExtractionRow row)
+    {
+        static string? MatchStructured(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+
+            // Structured envelopes like:
+            // VALIDATION_ERROR: MISSING_INPUT
+            // GENERIC_ERROR=CONTEXT_WINDOW_OVERFLOW
+            var marker = Regex.Match(
+                text,
+                @"\b(?:VALIDATION_ERROR|GENERIC_ERROR|ERROR_CODE)\s*[:=]\s*([A-Za-z0-9_.:-]+)\b",
+                RegexOptions.CultureInvariant);
+            if (marker.Success)
+            {
+                return marker.Groups[1].Value.Trim();
+            }
+
+            // Standard technical codes emitted by runtime components.
+            var knownCode = Regex.Match(
+                text,
+                @"\b(CONTEXT_WINDOW_OVERFLOW|CONTEXT_LENGTH_EXCEEDED|MAX_MODEL_LEN|TRUNCATION|MISSING_INPUT|EMPTY_INPUT|DIALOGUE_RATIO_ERROR|DUPLICATE_SENTENCE)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (knownCode.Success)
+            {
+                return knownCode.Groups[1].Value.Trim();
+            }
+
+            return null;
+        }
+
+        return MatchStructured(row.FailureReason)
+            ?? MatchStructured(row.Message)
+            ?? MatchStructured(row.Title);
+    }
+
+    private static string BuildSystemReportErrorFingerprint(string errorType, string? agent, string? step, string? checkName)
+    {
+        var canonical = string.Join("|", new[]
+        {
+            NormalizeToken(errorType),
+            NormalizeToken(agent),
+            NormalizeToken(step),
+            NormalizeToken(checkName)
+        });
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        var hex = Convert.ToHexString(bytes).ToLowerInvariant();
+        return hex.Length <= 64 ? hex : hex[..64];
+    }
+
+    private static string BuildSystemReportErrorSummary(string errorType, string? checkName, string? step)
+    {
+        var checkPart = string.IsNullOrWhiteSpace(checkName) ? "n/a" : checkName.Trim();
+        var stepPart = string.IsNullOrWhiteSpace(step) ? "n/a" : step.Trim();
+        return $"type={errorType}; check={checkPart}; step={stepPart}";
+    }
+
+    private static string NormalizeToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var normalized = value.Trim().ToLowerInvariant();
+        return Regex.Replace(normalized, @"\s+", " ");
+    }
+
+    private sealed class SystemReportPendingExtractionRow
+    {
+        public int Id { get; set; }
+        public string? Title { get; set; }
+        public string? Message { get; set; }
+        public string? FailureReason { get; set; }
+        public string? AgentName { get; set; }
+        public string? AgentRole { get; set; }
+        public string? OperationType { get; set; }
+    }
+
+    private sealed class SystemReportErrorUpsertRow
+    {
+        public int Id { get; set; }
+        public int Occurrences { get; set; }
     }
 
     public StoryRecord? GetStoryByCorrelationId(long correlationId)

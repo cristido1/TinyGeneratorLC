@@ -4,437 +4,60 @@
     ViewData["Title"] = "Logs";
     ViewData["PageDescription"] = "Visualizza e gestisci i log dell'applicazione";
 }
-<!-- Hidden buttons for JS handlers -->
-<button type="button" id="btnExportSelected" style="display:none;" disabled></button>
-<button type="button" id="btnClearAllLogs" style="display:none;"></button>
-
-<div id="selectedThreadInfo" class="alert alert-info d-none">
-    Selezionato: <strong>ThreadId <span id="selectedThreadIdDisplay"></span></strong>
-    <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="btnClearSelection">Deseleziona</button>
-</div>
-
-<form id="filterForm" class="row g-2 align-items-center mb-3">
-    <div class="col-auto form-check">
-        <input class="form-check-input" type="checkbox" id="onlyResultCheckbox" />
-        <label class="form-check-label" for="onlyResultCheckbox">Solo log con result</label>
-    </div>
-    <div class="col-auto form-check">
-        <input class="form-check-input" type="checkbox" id="onlyModelCheckbox" checked />
-        <label class="form-check-label" for="onlyModelCheckbox">Solo request/response</label>
-    </div>
-</form>
-
-@if (!string.IsNullOrEmpty(Model.StatusMessage))
-{
-    <div class="alert alert-info">@Model.StatusMessage</div>
-}
-
-<table id="logsTable" class="table table-bordered table-sm table-pastel table-compact datatable">
-    <thead>
-        <tr>
-            <!-- details-control column (official DataTables row details style) -->
-            <th style="width:38px;"></th>
-            <th>Timestamp</th>
-            <th>Level</th>
-            <th>Source</th>
-            <th>Result</th>
-            <th>Fail Reason</th>
-            <th>Operazione</th>
-            <th>Durata (s)</th>
-            <th>ThreadId</th>
-            <th>StoryId</th>
-            <th>Agent</th>
-            <th>Model</th>
-            <th>Azioni</th>
-        </tr>
-    </thead>
-    <tbody></tbody>
-</table>
-
-<form id="analyzeForm" method="post" asp-page-handler="Analyze" class="d-none">
-    <input type="hidden" name="threadId" />
-    <input type="hidden" name="threadScope" />
-</form>
-
-<form id="analyzeAllForm" method="post" asp-page-handler="AnalyzeMissing" class="d-none"></form>
-
-<form id="clearLogsForm" method="post" asp-page-handler="ClearAllLogs" class="d-none">
-</form>
 
 @section Styles {
-    <link rel="stylesheet" href="~/css/datatable-pastel-compact.css" />
+    <link rel="stylesheet" href="~/js/vue-roles/roles-index.css" asp-append-version="true" />
     <style>
-        /* Highlight model requests (pastel green) and responses (pastel yellow) */
+        /* Row coloring for model requests/responses */
         .log-model-request {
-            background-color: #e9f7ec !important; /* pastel green */
+            background-color: #e9f7ec !important;
         }
         .log-model-request td {
             background-color: transparent !important;
         }
-        .log-model-request td.message {
-            background-color: rgba(34,139,34,0.06) !important;
-            border-left: 4px solid rgba(34,139,34,0.14);
-        }
-
         .log-model-response {
-            background-color: #fffbe6 !important; /* pastel yellow */
+            background-color: #fffbe6 !important;
         }
         .log-model-response td {
             background-color: transparent !important;
         }
-        .log-model-response td.message {
-            background-color: rgba(255,193,7,0.06) !important;
-            border-left: 4px solid rgba(255,193,7,0.14);
-        }
-
         .log-response-checker {
-            background-color: #fff9db !important; /* very light pastel yellow */
+            background-color: #fff9db !important;
         }
         .log-response-checker td {
             background-color: transparent !important;
         }
-
-        /* Slightly bolder text for message cells containing model payloads */
-        .log-model-request td.message, .log-model-response td.message {
-            font-weight: 500;
-        }
-
         .log-content-highlight {
             background: #ffe599;
             border-radius: 2px;
             padding: 0 2px;
             font-weight: 600;
         }
-    </style>
-}
-
-@section Scripts {
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" />
-    <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.bootstrap5.min.css" />
-    <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.bootstrap5.min.css" />
-    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
-    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
-    <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
-    <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
-    <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
-    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.bootstrap5.min.js"></script>
-    <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.colVis.min.js"></script>
-    <style>
-        .log-row-selected {
-            background-color: #e7f3ff !important;
-            border-left: 3px solid #0d6efd;
+        .logs-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5rem;
+            align-items: center;
         }
-        .log-row-selectable {
+        .logs-grid-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            background: #fff;
+            padding: .375rem;
+            overflow-x: auto;
+        }
+        .logs-datatable {
+            min-width: 900px;
+        }
+        /* PrimeVue DataTable cursor pointer on rows */
+        .logs-datatable .p-datatable-tbody > tr {
             cursor: pointer;
         }
     </style>
-    <script>
-        $(function () {
-            var selectedThreadId = null;
-            var onlyModelCheckbox = $('#onlyModelCheckbox');
-            var onlyResultCheckbox = $('#onlyResultCheckbox');
-            var table = $('#logsTable').DataTable({
-                processing: true,
-                serverSide: true,
-                order: [[1, 'desc']], // timestamp column is now index 1 (0 = details control)
-                pageLength: 25,
-                responsive: false, // using explicit row().child for details
-                ajax: {
-                    url: '?handler=Data',
-                    type: 'GET',
-                    data: function (d) {
-                        d.onlyModel = !!onlyModelCheckbox.prop('checked');
-                        d.onlyResult = !!onlyResultCheckbox.prop('checked');
-                    }
-                },
-                columns: [
-                    {
-                        data: null,
-                        name: 'details',
-                        orderable: false,
-                        searchable: false,
-                        className: 'details-control text-center',
-                        render: function () {
-                            return '<button class="btn btn-sm btn-outline-secondary" type="button">+</button>';
-                        }
-                    },
-                    { data: 'timestamp', name: 'timestamp' },
-                    { data: 'level', name: 'level' },
-                    {
-                        data: 'source',
-                        name: 'source',
-                        render: function (v) {
-                            var source = String(v || '');
-                            if (source === 'ModelResponse' || source === 'ModelCompletion') {
-                                return '<span class="badge bg-warning"><i class="bi bi-chevron-left"></i> Response</span>';
-                            }
-                            if (source === 'ModelRequest' || source === 'ModelPrompt') {
-                                return '<span class="badge bg-success">Request <i class="bi bi-chevron-right"></i></span>';
-                            }
-                            return source || '-';
-                        }
-                    },
-                    {
-                        data: 'result',
-                        name: 'result',
-                        render: function (v) {
-                            var res = String(v || '').trim().toUpperCase();
-                            if (!res) return '<span class="text-muted">-</span>';
-                            var badge =
-                                res === 'SUCCESS' ? 'bg-success' :
-                                (res === 'FAILED' ? 'bg-warning text-dark' :
-                                (res === 'ERROR' ? 'bg-danger' : 'bg-secondary'));
-                            return '<span class="badge ' + badge + '">' + res + '</span>';
-                        }
-                    },
-                    { data: 'failReason', name: 'failreason', render: function (v) { return String(v || '-') || '-'; } },
-                    { data: 'operation', name: 'operation' },
-                    { data: 'duration', name: 'duration' },
-                    { data: 'threadId', name: 'threadid' },
-                    { data: 'storyId', name: 'storyid' },
-                    { data: 'agent', name: 'agent' },
-                    { data: 'model', name: 'model' },
-                    {
-                        data: null,
-                        name: 'actions',
-                        orderable: false,
-                        searchable: false,
-                        render: function (row) {
-                            var analyze = '<button type="button" class="btn btn-sm btn-outline-secondary btn-analyze me-1">Analizza</button>';
-                            var view = '';
-                            if (row && row.analized && row.threadIdRaw && row.threadIdRaw > 0) {
-                                view = '<a class="btn btn-sm btn-outline-primary" href="/Logs/Analysis?threadId=' + encodeURIComponent(row.threadIdRaw) + '">Vedi analisi</a>';
-                            }
-                            return analyze + view;
-                        }
-                    }
-                ],
-                columnDefs: [
-                    { orderable: false, targets: 0 }, // details control column not sortable
-                    { responsivePriority: 1, targets: 1 }, // Timestamp always visible
-                    { responsivePriority: 2, targets: 2 }, // Level always visible
-                    { responsivePriority: 3, targets: 4 }, // Result
-                    { responsivePriority: 4, targets: 5 }, // Fail Reason
-                    { responsivePriority: 5, targets: 6 }, // Operation
-                    { responsivePriority: 6, targets: 7 }, // Duration
-                    { responsivePriority: 7, targets: 8 }, // ThreadId
-                    { responsivePriority: 8, targets: 9 }, // StoryId
-                    { responsivePriority: 9, targets: 10 }, // AgentName
-                    { responsivePriority: 10, targets: 11 }, // Model
-                    { responsivePriority: 11, targets: 3 }, // Source
-                    { orderable: false, targets: 12 }      // Actions
-                ],
-                dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
-                     "rt" +
-                     "<'row'<'col-sm-6'i><'col-sm-6'p>>",
-                buttons: [
-                    {
-                        text: 'Log Chat',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            window.location.href = '/Logs/LogChat';
-                        }
-                    },
-                    {
-                        text: 'Export Selected',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $('#btnExportSelected').click();
-                        },
-                        init: function(dt, node, config) {
-                            $(node).prop('disabled', !selectedThreadId);
-                        }
-                    },
-                    {
-                        text: 'Export All',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            window.location.href = '?handler=Export';
-                        }
-                    },
-                    {
-                        text: 'Clear All',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $('#btnClearAllLogs').click();
-                        }
-                    },
-                    {
-                        text: 'Analyze',
-                        className: 'btn btn-light btn-sm',
-                        action: function(e, dt, node, config) {
-                            $('<form method="post" action="?handler=AnalyzeMissing"><input type="hidden" name="__RequestVerificationToken" value="' + $('input[name=__RequestVerificationToken]').val() + '" /></form>').appendTo('body').submit();
-                        }
-                    },
-                    {
-                        extend: 'colvis',
-                        text: 'Columns',
-                        className: 'btn btn-light btn-sm'
-                    }
-                ],
-                stateSave: true,
-                stateSaveName: 'DataTables_logs',
-                stateDuration: -1,
-                createdRow: function (row, data) {
-                    var source = String((data && data.source) || '');
-                    var rowClass = '';
-                    if (source === 'ModelRequest' || source === 'ModelPrompt') rowClass = 'log-model-request';
-                    else if (source === 'ModelResponse' || source === 'ModelCompletion') rowClass = 'log-model-response';
-                    if (source.toLowerCase().indexOf('responsechecker') >= 0) {
-                        rowClass = rowClass ? (rowClass + ' log-response-checker') : 'log-response-checker';
-                    }
-
-                    $(row)
-                        .addClass('log-row-selectable')
-                        .attr('data-id', data.id || 0)
-                        .attr('data-source', source)
-                        .attr('data-threadid', data.threadIdRaw || 0)
-                        .attr('data-threadscope', (data.threadScope || ''));
-
-                    if (rowClass) {
-                        $(row).addClass(rowClass);
-                    }
-                }
-            });
-
-            // Build details HTML for a row - message is fetched lazily from server
-            function decodeEscapes(s) {
-                if (!s) return '';
-                // Convert common escaped sequences \r\n, \n, \r, \t
-                var out = s.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n').replace(/\\t/g, '\t');
-                // Decode unicode sequences like \u00E8
-                out = out.replace(/\\u([0-9a-fA-F]{4})/g, function(match, grp) { return String.fromCharCode(parseInt(grp, 16)); });
-                // Decode hex escapes like \xE8
-                out = out.replace(/\\x([0-9a-fA-F]{2})/g, function(match, grp) { return String.fromCharCode(parseInt(grp, 16)); });
-                return out;
-            }
-
-            // escape for safe HTML insertion (we keep newlines intact inside <pre>)
-            function htmlEscape(str) {
-                if (!str) return '';
-                return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            }
-
-            function formatLogDetailsFromMessage(message) {
-                var decoded = decodeEscapes(message || '');
-                var safe = htmlEscape(decoded);
-                safe = safe.replace(/\bcontent\b/gi, function(match) {
-                    return '<span class="log-content-highlight">' + match + '</span>';
-                });
-                var html = '<div style="padding:8px 12px;font-size:0.95rem;color:#222;background:#f8f9fa;border-radius:4px;">';
-                html += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid #ddd;padding:8px;margin:0;border-radius:3px;max-height:420px;overflow:auto;">' + safe + '</pre>';
-                html += '</div>';
-                return html;
-            }
-
-            // Use the official DataTables row().child API for details collapse/expand
-            $('#logsTable tbody').on('click', 'td.details-control button', function () {
-                var btn = $(this);
-                var tr = btn.closest('tr');
-                var row = table.row(tr);
-                var rowData = row && typeof row.data === 'function' ? row.data() : null;
-                var logId = tr.data('id') || (rowData ? rowData.id : null);
-
-                if (row.child.isShown()) {
-                    // Close
-                    row.child.hide();
-                    tr.removeClass('shown');
-                    btn.text('+');
-                } else {
-                    // Open: fetch message lazily from server
-                    if (!logId) {
-                        row.child(formatLogDetailsFromMessage('ID log non disponibile')).show();
-                        tr.addClass('shown');
-                        btn.text('âˆ’');
-                        return;
-                    }
-                    btn.prop('disabled', true);
-                    $.ajax({
-                        url: '?handler=Message&id=' + encodeURIComponent(logId),
-                        method: 'GET',
-                        success: function (data) {
-                            var msg = (data && data.message) ? data.message : '';
-                            row.child(formatLogDetailsFromMessage(msg)).show();
-                            tr.addClass('shown');
-                            btn.text('−');
-                        },
-                        error: function () {
-                            row.child(formatLogDetailsFromMessage('Impossibile caricare il messaggio')).show();
-                            tr.addClass('shown');
-                            btn.text('−');
-                        },
-                        complete: function () { btn.prop('disabled', false); }
-                    });
-                }
-            });
-
-            $('#logsTable').on('click', '.btn-analyze', function (evt) {
-                evt.preventDefault();
-                evt.stopPropagation();
-                var tr = $(this).closest('tr');
-                var threadId = tr.data('threadid');
-                var scope = tr.data('threadscope');
-                var form = $('#analyzeForm');
-                form.find('input[name="threadId"]').val(threadId);
-                form.find('input[name="threadScope"]').val(scope);
-                form.trigger('submit');
-            });
-
-            // Server-side filters
-            $('#onlyResultCheckbox').on('change', function() {
-                table.ajax.reload();
-            });
-            onlyModelCheckbox.on('change', function() {
-                table.ajax.reload();
-            });
-
-
-            $('#btnClearAllLogs').on('click', function() {
-                if (confirm('Sei sicuro di voler cancellare TUTTI i log e le relative analisi? Questa operazione è irreversibile.')) {
-                    $('#clearLogsForm').trigger('submit');
-                }
-            });
-
-            // Row selection for ThreadId filtering
-            $('#logsTable tbody').on('click', 'tr', function(evt) {
-                // Ignore clicks on buttons and details control
-                if ($(evt.target).closest('button, .btn').length > 0) return;
-                if ($(evt.target).closest('.details-control').length > 0) return;
-                
-                var tr = $(this);
-                var threadId = tr.data('threadid');
-                
-                if (!threadId || threadId === 0) {
-                    return;
-                }
-                
-                // Deselect all rows
-                $('#logsTable tbody tr').removeClass('log-row-selected');
-                
-                // Select this row
-                tr.addClass('log-row-selected');
-                selectedThreadId = threadId;
-                
-                // Update UI
-                $('#selectedThreadIdDisplay').text(threadId);
-                $('#selectedThreadInfo').removeClass('d-none');
-                $('#btnExportSelected').prop('disabled', false);
-            });
-
-            $('#btnClearSelection').on('click', function() {
-                $('#logsTable tbody tr').removeClass('log-row-selected');
-                selectedThreadId = null;
-                $('#selectedThreadInfo').addClass('d-none');
-                $('#btnExportSelected').prop('disabled', true);
-            });
-
-            $('#btnExportSelected').on('click', function() {
-                if (selectedThreadId) {
-                    window.location.href = '?handler=Export&threadId=' + selectedThreadId;
-                }
-            });
-
-        });
-    </script>
 }
 
+<div id="logs-vue-app"></div>
+
+@section Scripts {
+    <script type="module" src="~/js/logs/logs-index.js" asp-append-version="true"></script>
+}

@@ -396,7 +396,7 @@ namespace TinyGenerator.Services
                 }
                 else if (isVllm)
                 {
-                    var vllmMaxModelLen = _config.GetValue<int?>("VllmServer:MaxModelLen");
+                    var vllmMaxModelLen = _config.GetValue<int?>("ExternalServers:vLLM:MaxModelLen");
                     if (vllmMaxModelLen is > 0)
                         bridge.NumCtx = vllmMaxModelLen.Value;
                 }

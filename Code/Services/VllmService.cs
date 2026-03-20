@@ -494,7 +494,7 @@ public sealed class VllmService
         }
         if (options.DisableRequestLogging)
         {
-            sb.Append(useNightlyCli ? " --no-enable-log-requests" : " --disable-log-requests");
+            sb.Append(" --no-enable-log-requests");
         }
 
         return sb.ToString();

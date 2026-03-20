@@ -6,7 +6,7 @@ SETLOCAL EnableExtensions
 
 set "CONTAINER_NAME=tinygenerator-vllm"
 set "IMAGE=vllm/vllm-openai:latest"
-set "HOST_PORT=8000"
+set "HOST_PORT=8001"
 set "CONTAINER_PORT=8000"
 set "HOST_MODELS_PATH=C:\vllm_models"
 set "CONTAINER_MODELS_PATH=/models"

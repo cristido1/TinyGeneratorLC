@@ -16,7 +16,8 @@ public sealed partial class StoriesService
     /// Command that assigns TTS voices to characters in a story's tts_schema.json.
     /// Rules:
     /// - Narratore must use only voices with archetype "narratore".
-    /// - A voiceId can be assigned to one character only.
+    /// - Prefer unique voiceId per character; if a specific gender pool is exhausted,
+    ///   allow controlled reuse of a compatible voice to avoid blocking prepare_tts_schema.
     /// - Character voice must match required gender.
     /// </summary>
     internal sealed class AssignVoicesCommand : IStoryCommand, ICommand
@@ -72,6 +73,7 @@ public sealed partial class StoriesService
                 var errors = new List<string>();
                 int assignedCount = 0;
                 int replacedCount = 0;
+                int reusedCount = 0;
 
                 var narrator = schema.Characters.FirstOrDefault(c => IsNarratorName(c.Name));
                 if (narrator != null)
@@ -139,6 +141,17 @@ public sealed partial class StoriesService
                         }
                     }
 
+                    // Last-resort fallback: if the required gender exists but all matching voices are already used,
+                    // allow reuse of a compatible character voice so prepare_tts_schema can complete.
+                    if (selected == null && !IsUnknownOrUnspecifiedGender(targetGender))
+                    {
+                        selected = PickBestCharacterVoiceAllowReuse(targetGender, storyChar?.Age, allVoices);
+                        if (selected != null)
+                        {
+                            reusedCount++;
+                        }
+                    }
+
                     if (selected == null)
                     {
                         errors.Add($"{character.Name}: nessuna voce disponibile (gender richiesto: {targetGender}).");
@@ -168,7 +181,7 @@ public sealed partial class StoriesService
                     .Select(g => $"{g.Key}: {string.Join(", ", g.Select(c => c.Name ?? "?"))}")
                     .ToList();
 
-                if (duplicates.Any())
+                if (duplicates.Any() && reusedCount == 0)
                 {
                     return Task.FromResult<(bool, string?)>((false,
                         $"Violazione unicita voiceId: {string.Join("; ", duplicates)}"));
@@ -184,11 +197,11 @@ public sealed partial class StoriesService
                 _service.SaveSanitizedTtsSchemaJson(schemaPath, updatedJson);
 
                 _service._logger?.LogInformation(
-                    "Assigned/revalidated voices for story {StoryId}: assigned={Assigned}, replaced={Replaced}, total={Total}",
-                    story.Id, assignedCount, replacedCount, schema.Characters.Count);
+                    "Assigned/revalidated voices for story {StoryId}: assigned={Assigned}, replaced={Replaced}, reused={Reused}, total={Total}",
+                    story.Id, assignedCount, replacedCount, reusedCount, schema.Characters.Count);
 
                 return Task.FromResult<(bool, string?)>((true,
-                    $"Assegnazione voci completata: {assignedCount} assegnazioni, {replacedCount} riassegnazioni, {schema.Characters.Count} personaggi."));
+                    $"Assegnazione voci completata: {assignedCount} assegnazioni, {replacedCount} riassegnazioni, {reusedCount} riusi, {schema.Characters.Count} personaggi."));
             }
             catch (Exception ex)
             {
@@ -306,6 +319,49 @@ public sealed partial class StoriesService
                     !string.IsNullOrWhiteSpace(v.VoiceId) &&
                     !usedVoiceIds.Contains(v.VoiceId) &&
                     !IsNarratorVoice(v))
+                .ToList();
+
+            if (candidates.Count == 0)
+                return null;
+
+            // Preserve scarce special voices (robot/alien) for explicit gender requests.
+            var preferred = candidates
+                .Where(v =>
+                {
+                    var g = NormalizeGender(v.Gender);
+                    return g == "male" || g == "female" || g == "neutral";
+                })
+                .ToList();
+            if (preferred.Count > 0)
+            {
+                candidates = preferred;
+            }
+
+            int? targetAgeNum = ParseAgeToNumber(targetAge);
+
+            return candidates
+                .Select(v => new
+                {
+                    Voice = v,
+                    Score = v.Score ?? 0,
+                    AgeDiff = CalculateAgeDifference(v.Age, targetAgeNum)
+                })
+                .OrderBy(x => x.AgeDiff)
+                .ThenByDescending(x => x.Score)
+                .Select(x => x.Voice)
+                .FirstOrDefault();
+        }
+
+        private static TinyGenerator.Models.TtsVoice? PickBestCharacterVoiceAllowReuse(
+            string targetGender,
+            string? targetAge,
+            List<TinyGenerator.Models.TtsVoice> allVoices)
+        {
+            var candidates = allVoices
+                .Where(v =>
+                    !string.IsNullOrWhiteSpace(v.VoiceId) &&
+                    !IsNarratorVoice(v) &&
+                    VoiceGenderMatches(v, targetGender))
                 .ToList();
 
             if (candidates.Count == 0)

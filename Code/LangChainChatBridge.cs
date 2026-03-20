@@ -2054,7 +2054,14 @@ namespace TinyGenerator.Services
             }
 
             var hasStructuredResponseFormat = ResponseFormat != null;
-            var expectedOutputTokens = Math.Max(32, MaxResponseTokens ?? 128);
+            var requestedOutputTokens = Math.Max(32, MaxResponseTokens ?? 128);
+            // Do not reserve the full configured max output for prompt-shrinking checks:
+            // an oversized output budget can force unnecessary message reductions even when
+            // the actual input is moderate (e.g. ~1k tokens).
+            var promptSafetyOutputCap = NumCtx.HasValue && NumCtx.Value > 0
+                ? Math.Max(128, (int)Math.Floor(NumCtx.Value * 0.35))
+                : requestedOutputTokens;
+            var expectedOutputTokens = Math.Min(requestedOutputTokens, promptSafetyOutputCap);
 
             if (IsWithinVllmSafetyMargin(prepared, tools, hasStructuredResponseFormat, expectedOutputTokens, out var initialEstimated, out var initialAllowed))
             {

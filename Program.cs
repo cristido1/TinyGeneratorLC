@@ -248,9 +248,10 @@ if (commandsRoot.Exists() && byCommandSection.Exists())
             }
         }
 
-        BindTuning("add_ambient_tags_to_story", "AmbientExpert", options.AmbientExpert);
-        BindTuning("add_fx_tags_to_story", "FxExpert", options.FxExpert);
-        BindTuning("add_music_tags_to_story", "MusicExpert", options.MusicExpert);
+        BindTuning("add_ambient_tags_to_story", "AmbientExpert", options.AddAmbientTagsToStory);
+        BindTuning("add_voice_tags_to_story", "AddVoiceTagsToStory", options.AddVoiceTagsToStory);
+        BindTuning("add_fx_tags_to_story", "FxExpert", options.AddFxTagsToStory);
+        BindTuning("add_music_tags_to_story", "MusicExpert", options.AddMusicTagsToStory);
         BindTuning("transform_story_raw_to_tagged", "TransformStoryRawToTagged", options.TransformStoryRawToTagged);
         BindTuning("generate_next_chunk", "GenerateNextChunk", options.GenerateNextChunk);
         BindTuning("planned_story", "PlannedStory", options.PlannedStory);

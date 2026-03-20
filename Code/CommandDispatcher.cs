@@ -837,8 +837,11 @@ namespace TinyGenerator.Services
             {
                 "add_voice_tags_to_story" => "formatter",
                 "add_ambient_tags_to_story" => "ambient_expert",
+                "regen_ambient_tags" => "ambient_expert",
                 "add_fx_tags_to_story" => "fx_expert",
+                "regen_fx_tags" => "fx_expert",
                 "add_music_tags_to_story" => "music_expert",
+                "regen_music_tags" => "music_expert",
                 "always_on_story_summaries" => "summarizer",
                 "canon_extractor" => "canon_extractor",
                 "continuity_validator" => "continuity_validator",
@@ -1800,4 +1803,3 @@ Completed:
         public int MaxRetry { get; set; }
     }
 }
-

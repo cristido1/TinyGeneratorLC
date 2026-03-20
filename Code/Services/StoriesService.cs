@@ -5950,8 +5950,11 @@ $@"<!doctype html>
             {
                 "add_voice_tags_to_story" => "formatter",
                 "add_ambient_tags_to_story" => "ambient_expert",
+                "regen_ambient_tags" => "ambient_expert",
                 "add_fx_tags_to_story" => "fx_expert",
+                "regen_fx_tags" => "fx_expert",
                 "add_music_tags_to_story" => "music_expert",
+                "regen_music_tags" => "music_expert",
                 _ => null
             };
         }
@@ -13614,6 +13617,5 @@ Regole:
 - Copri tutto il chunk, pi� blocchi uno dopo l'altro finch� il chunk e esaurito.";
     }
 }
-
 
 

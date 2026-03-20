@@ -2,9 +2,10 @@ namespace TinyGenerator.Services;
 
 public sealed class CommandTuningOptions
 {
-    public AmbientExpertTuning AmbientExpert { get; set; } = new();
-    public FxExpertTuning FxExpert { get; set; } = new();
-    public MusicExpertTuning MusicExpert { get; set; } = new();
+    public AddVoiceTagsToStoryTuning AddVoiceTagsToStory { get; set; } = new();
+    public AmbientExpertTuning AddAmbientTagsToStory { get; set; } = new();
+    public FxExpertTuning AddFxTagsToStory { get; set; } = new();
+    public AddMusicTagsToStoryTuning AddMusicTagsToStory { get; set; } = new();
     public TransformStoryRawToTaggedTuning TransformStoryRawToTagged { get; set; } = new();
     public GenerateNextChunkTuning GenerateNextChunk { get; set; } = new();
     public PlannedStoryTuning PlannedStory { get; set; } = new();
@@ -25,6 +26,20 @@ public sealed class CommandTuningOptions
         public int RetryDelayBaseSeconds { get; set; } = 2;
     }
 
+    public sealed class AddVoiceTagsToStoryTuning
+    {
+        public bool AutolaunchNextCommand { get; set; } = true;
+        public int MinTokensPerChunk { get; set; } = 1000;
+        public int MaxTokensPerChunk { get; set; } = 2000;
+        public int TargetTokensPerChunk { get; set; } = 1500;
+        public int MaxAttemptsPerChunk { get; set; } = 3;
+        // Formatter V2: number of correction retries after the first attempt.
+        public int FormatterV2CorrectionRetries { get; set; } = 3;
+        public int MaxDialogueLinesPerFormatterRequest { get; set; } = 10;
+        public bool EnableFallback { get; set; } = true;
+        public bool DiagnoseOnFinalFailure { get; set; } = true;
+    }
+
     public sealed class FxExpertTuning
     {
         public bool AutolaunchNextCommand { get; set; } = true;
@@ -37,7 +52,7 @@ public sealed class CommandTuningOptions
         public int RetryDelayBaseSeconds { get; set; } = 2;
     }
 
-    public sealed class MusicExpertTuning
+    public sealed class AddMusicTagsToStoryTuning
     {
         public bool AutolaunchNextCommand { get; set; } = true;
         public int MinTokensPerChunk { get; set; } = 1000;

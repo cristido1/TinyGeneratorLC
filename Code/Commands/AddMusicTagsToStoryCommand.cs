@@ -150,13 +150,13 @@ namespace TinyGenerator.Services.Commands
                     var requiredTags = ComputeRequiredMusicTagsForChunk(chunk.Text);
                     var callOptions = new CallOptions
                     {
-                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.MusicExpert.MaxAttemptsPerChunk * 15)),
-                        MaxRetries = Math.Max(0, _tuning.MusicExpert.MaxAttemptsPerChunk - 1),
+                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.AddMusicTagsToStory.MaxAttemptsPerChunk * 15)),
+                        MaxRetries = Math.Max(0, _tuning.AddMusicTagsToStory.MaxAttemptsPerChunk - 1),
                         // Avoid checker-driven retry loops for structured tag mapping.
                         // Deterministic checks remain active via CallCenter.
                         UseResponseChecker = false,
-                        AskFailExplanation = _tuning.MusicExpert.DiagnoseOnFinalFailure,
-                        AllowFallback = _tuning.MusicExpert.EnableFallback,
+                        AskFailExplanation = _tuning.AddMusicTagsToStory.DiagnoseOnFinalFailure,
+                        AllowFallback = _tuning.AddMusicTagsToStory.EnableFallback,
                         Operation = CommandScopePaths.AddMusicTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckMusicTagMinimumCount
@@ -210,7 +210,7 @@ namespace TinyGenerator.Services.Commands
                     preparation.Story,
                     effectiveRunId,
                     _storyId,
-                    _tuning.MusicExpert.AutolaunchNextCommand);
+                    _tuning.AddMusicTagsToStory.AutolaunchNextCommand);
 
                 telemetry.MarkCompleted(effectiveRunId, "ok");
                 telemetry.ReportProgress(
@@ -244,8 +244,8 @@ namespace TinyGenerator.Services.Commands
 
         private int ComputeRequiredMusicTagsForChunk(string chunkText)
         {
-            var maxRequired = Math.Max(1, _tuning.MusicExpert.MaxMusicTagsPerChunkRequirement);
-            var minRequired = Math.Max(0, _tuning.MusicExpert.MinMusicTagsPerChunkRequirement);
+            var maxRequired = Math.Max(1, _tuning.AddMusicTagsToStory.MaxMusicTagsPerChunkRequirement);
+            var minRequired = Math.Max(0, _tuning.AddMusicTagsToStory.MinMusicTagsPerChunkRequirement);
 
             if (string.IsNullOrWhiteSpace(chunkText)) return maxRequired;
 
@@ -297,9 +297,9 @@ namespace TinyGenerator.Services.Commands
 
         private (int minTokens, int maxTokens, int targetTokens, string? note) ResolveMusicChunkSizingForModel(int modelId, string? modelName)
         {
-            var minCfg = Math.Max(1, _tuning.MusicExpert.MinTokensPerChunk);
-            var maxCfg = Math.Max(minCfg, _tuning.MusicExpert.MaxTokensPerChunk);
-            var targetCfg = Math.Clamp(_tuning.MusicExpert.TargetTokensPerChunk, minCfg, maxCfg);
+            var minCfg = Math.Max(1, _tuning.AddMusicTagsToStory.MinTokensPerChunk);
+            var maxCfg = Math.Max(minCfg, _tuning.AddMusicTagsToStory.MaxTokensPerChunk);
+            var targetCfg = Math.Clamp(_tuning.AddMusicTagsToStory.TargetTokensPerChunk, minCfg, maxCfg);
 
             var db = ServiceLocator.Services?.GetService(typeof(DatabaseService)) as DatabaseService;
             if (db == null)

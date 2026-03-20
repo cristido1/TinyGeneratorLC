@@ -103,8 +103,8 @@ namespace TinyGenerator.Services.Commands
                     resolvedAgent.BaseSystemPrompt,
                     StoryTaggingService.TagTypeFx);
 
-                var fxTargetTokens = Math.Max(1, _tuning.FxExpert.DefaultTargetTokensPerChunk);
-                var fxMaxTokens = Math.Max(1, _tuning.FxExpert.DefaultMaxTokensPerChunk);
+                var fxTargetTokens = Math.Max(1, _tuning.AddFxTagsToStory.DefaultTargetTokensPerChunk);
+                var fxMaxTokens = Math.Max(1, _tuning.AddFxTagsToStory.DefaultMaxTokensPerChunk);
                 var fxMinTokens = Math.Max(0, Math.Min(fxTargetTokens, fxMaxTokens / 2));
 
                 var preparation = _storyTaggingPipelineService.PrepareTagging(
@@ -123,7 +123,7 @@ namespace TinyGenerator.Services.Commands
                         : "FX tags: nessun chunk da processare");
 
                 var fxTags = new List<StoryTaggingService.StoryTagEntry>();
-                var minFxTags = Math.Max(0, _tuning.FxExpert.MinFxTagsPerChunk);
+                var minFxTags = Math.Max(0, _tuning.AddFxTagsToStory.MinFxTagsPerChunk);
 
                 for (int i = 0; i < preparation.Chunks.Count; i++)
                 {
@@ -147,13 +147,13 @@ namespace TinyGenerator.Services.Commands
 
                     var callOptions = new CallOptions
                     {
-                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.FxExpert.MaxAttemptsPerChunk * 15)),
-                        MaxRetries = Math.Max(0, _tuning.FxExpert.MaxAttemptsPerChunk - 1),
+                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.AddFxTagsToStory.MaxAttemptsPerChunk * 15)),
+                        MaxRetries = Math.Max(0, _tuning.AddFxTagsToStory.MaxAttemptsPerChunk - 1),
                         // Response checker sta producendo falsi negativi su FX ("output troncato")
                         // anche con JSON valido; manteniamo la validazione tramite deterministic checks.
                         UseResponseChecker = false,
-                        AskFailExplanation = _tuning.FxExpert.DiagnoseOnFinalFailure,
-                        AllowFallback = _tuning.FxExpert.EnableFallback,
+                        AskFailExplanation = _tuning.AddFxTagsToStory.DiagnoseOnFinalFailure,
+                        AllowFallback = _tuning.AddFxTagsToStory.EnableFallback,
                         Operation = CommandScopePaths.AddFxTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckFxMappingValidity
@@ -205,7 +205,7 @@ namespace TinyGenerator.Services.Commands
                     preparation.Story,
                     effectiveRunId,
                     _storyId,
-                    _tuning.FxExpert.AutolaunchNextCommand);
+                    _tuning.AddFxTagsToStory.AutolaunchNextCommand);
 
                 telemetry.MarkCompleted(effectiveRunId, "ok");
                 telemetry.ReportProgress(

@@ -97,15 +97,15 @@ namespace TinyGenerator.Services.Commands
 
                 var preparation = _storyTaggingPipelineService.PrepareTagging(
                     _storyId,
-                    _tuning.TransformStoryRawToTagged.MinTokensPerChunk,
-                    _tuning.TransformStoryRawToTagged.MaxTokensPerChunk,
-                    _tuning.TransformStoryRawToTagged.TargetTokensPerChunk);
+                    _tuning.AddVoiceTagsToStory.MinTokensPerChunk,
+                    _tuning.AddVoiceTagsToStory.MaxTokensPerChunk,
+                    _tuning.AddVoiceTagsToStory.TargetTokensPerChunk);
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
                 _logger?.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
 
                 var formatterTags = new List<StoryTaggingService.StoryTagEntry>();
-                var maxDialogueLinesPerRequestGlobal = Math.Max(1, _tuning.TransformStoryRawToTagged.MaxDialogueLinesPerFormatterRequest);
+                var maxDialogueLinesPerRequestGlobal = Math.Max(1, _tuning.AddVoiceTagsToStory.MaxDialogueLinesPerFormatterRequest);
                 var totalFormatterSlices = 0;
                 foreach (var c in preparation.Chunks)
                 {
@@ -160,10 +160,10 @@ namespace TinyGenerator.Services.Commands
                         }
                         history.AddUser(userContent);
 
-                        var correctionRetries = Math.Max(0, _tuning.TransformStoryRawToTagged.FormatterV2CorrectionRetries);
+                        var correctionRetries = Math.Max(0, _tuning.AddVoiceTagsToStory.FormatterV2CorrectionRetries);
                         var maxAttempts = correctionRetries > 0
                             ? 1 + correctionRetries
-                            : Math.Max(1, _tuning.TransformStoryRawToTagged.MaxAttemptsPerChunk);
+                            : Math.Max(1, _tuning.AddVoiceTagsToStory.MaxAttemptsPerChunk);
 
                         var callOptions = new CallOptions
                         {
@@ -171,8 +171,8 @@ namespace TinyGenerator.Services.Commands
                             Timeout = TimeSpan.FromSeconds(90),
                             MaxRetries = Math.Max(0, maxAttempts - 1),
                             UseResponseChecker = false,
-                            AllowFallback = _tuning.TransformStoryRawToTagged.EnableFallback,
-                            AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure
+                            AllowFallback = _tuning.AddVoiceTagsToStory.EnableFallback,
+                            AskFailExplanation = _tuning.AddVoiceTagsToStory.DiagnoseOnFinalFailure
                         };
                         foreach (var lineId in quoteLineIds.OrderBy(x => x))
                         {
@@ -237,7 +237,7 @@ namespace TinyGenerator.Services.Commands
                     preparation.Story,
                     effectiveRunId,
                     _storyId,
-                    _tuning.TransformStoryRawToTagged.AutolaunchNextCommand);
+                    _tuning.AddVoiceTagsToStory.AutolaunchNextCommand);
 
                 _logger?.MarkCompleted(effectiveRunId, "ok");
                 return new CommandResult(

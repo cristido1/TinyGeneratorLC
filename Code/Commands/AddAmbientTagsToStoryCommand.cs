@@ -102,7 +102,7 @@ namespace TinyGenerator.Services.Commands
                     resolvedAgent.BaseSystemPrompt,
                     StoryTaggingService.TagTypeAmbient);
 
-                var preparation = _storyTaggingPipelineService.PrepareAmbientTagging(_storyId, _tuning.AmbientExpert);
+                var preparation = _storyTaggingPipelineService.PrepareAmbientTagging(_storyId, _tuning.AddAmbientTagsToStory);
                 _storyTaggingPipelineService.PersistInitialRows(preparation);
 
                 telemetry.Append(effectiveRunId, $"[story {_storyId}] Split into {preparation.Chunks.Count} chunks (rows)");
@@ -111,7 +111,7 @@ namespace TinyGenerator.Services.Commands
 
                 var ambientTags = new List<StoryTaggingService.StoryTagEntry>();
                 var currentModelName = resolvedAgent.ModelName;
-                var minAmbientTags = Math.Max(0, _tuning.AmbientExpert.MinAmbientTagsPerChunkRequirement);
+                var minAmbientTags = Math.Max(0, _tuning.AddAmbientTagsToStory.MinAmbientTagsPerChunkRequirement);
 
                 for (int i = 0; i < preparation.Chunks.Count; i++)
                 {
@@ -134,11 +134,11 @@ namespace TinyGenerator.Services.Commands
 
                     var callOptions = new CallOptions
                     {
-                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.AmbientExpert.RequestTimeoutSeconds)),
-                        MaxRetries = Math.Max(0, _tuning.AmbientExpert.MaxAttemptsPerChunk - 1),
+                        Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.AddAmbientTagsToStory.RequestTimeoutSeconds)),
+                        MaxRetries = Math.Max(0, _tuning.AddAmbientTagsToStory.MaxAttemptsPerChunk - 1),
                         UseResponseChecker = true,
-                        AskFailExplanation = _tuning.AmbientExpert.DiagnoseOnFinalFailure,
-                        AllowFallback = _tuning.AmbientExpert.EnableFallback,
+                        AskFailExplanation = _tuning.AddAmbientTagsToStory.DiagnoseOnFinalFailure,
+                        AllowFallback = _tuning.AddAmbientTagsToStory.EnableFallback,
                         Operation = CommandScopePaths.AddAmbientTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckAmbientTagMinimumCount
@@ -194,7 +194,7 @@ namespace TinyGenerator.Services.Commands
                     preparation.Story,
                     effectiveRunId,
                     _storyId,
-                    _tuning.AmbientExpert.AutolaunchNextCommand);
+                    _tuning.AddAmbientTagsToStory.AutolaunchNextCommand);
 
                 telemetry.ReportProgress(totalChunks, totalChunks, "Ambient tags completati (100%)");
                 telemetry.MarkCompleted(effectiveRunId, "ok");

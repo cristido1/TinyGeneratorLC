@@ -9,7 +9,11 @@ internal static class CommandOperationNameResolver
     private static readonly Dictionary<string, string[]> CanonicalAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["generate_series_episode"] = new[] { "series_episode" },
-        ["state_driven_episode_auto"] = new[] { "state_driven_series_episode_auto" }
+        ["state_driven_episode_auto"] = new[] { "state_driven_series_episode_auto" },
+        ["add_voice_tags_to_story"] = new[] { "story/add_voice_tags_to_story" },
+        ["add_ambient_tags_to_story"] = new[] { "story/add_ambient_tags_to_story", "regen_ambient_tags" },
+        ["add_fx_tags_to_story"] = new[] { "story/add_fx_tags_to_story", "regen_fx_tags" },
+        ["add_music_tags_to_story"] = new[] { "story/add_music_tags_to_story", "regen_music_tags" }
     };
 
     private static readonly Dictionary<string, string> AliasToCanonical = BuildAliasToCanonical();

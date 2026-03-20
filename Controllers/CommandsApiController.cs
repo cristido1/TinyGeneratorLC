@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -10,6 +11,9 @@ namespace TinyGenerator.Controllers
     [Route("api/commands")]
     public class CommandsApiController : ControllerBase
     {
+        private static readonly IReadOnlyList<Type> _commandTypes = DiscoverCommandTypes();
+        private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
         private readonly ICommandDispatcher _dispatcher;
         private readonly DatabaseService _database;
         private readonly ILangChainKernelFactory _kernelFactory;
@@ -306,6 +310,168 @@ namespace TinyGenerator.Controllers
                 priority: 2);
 
             return Ok(new { runId, storyId = request.StoryId, message = "Next chunk enqueued" });
+        }
+
+        /// <summary>
+        /// GET /api/commands/available
+        /// Restituisce la lista di tutti i comandi ICommand disponibili con i relativi parametri del costruttore.
+        /// </summary>
+        [HttpGet("available")]
+        public IActionResult GetAvailableCommands()
+        {
+            var result = _commandTypes.Select(t =>
+            {
+                var commandName = ComputeCommandName(t);
+                var ctor = t.GetConstructors()
+                    .OrderByDescending(c => c.GetParameters().Length)
+                    .FirstOrDefault();
+                var parameters = ctor?.GetParameters()
+                    .Select(p => new
+                    {
+                        name = p.Name!,
+                        type = p.ParameterType.Name,
+                        required = !p.HasDefaultValue
+                    })
+                    .ToList() ?? [];
+                return new { commandName, typeName = t.Name, parameters };
+            }).ToList();
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// POST /api/commands/run/{commandName}
+        /// Accoda un comando ICommand identificato dal suo CommandName (snake_case) o dal nome del tipo (senza suffisso "Command").
+        /// I parametri non risolvibili da DI devono essere forniti nel body come oggetto JSON (chiave = nome parametro).
+        /// </summary>
+        [HttpPost("run/{commandName}")]
+        public IActionResult RunCommand(
+            string commandName,
+            [FromBody] Dictionary<string, JsonElement>? parameters)
+        {
+            var commandType = FindCommandTypeByName(commandName);
+            if (commandType == null)
+                return NotFound(new { error = $"Comando '{commandName}' non trovato." });
+
+            ICommand command;
+            try
+            {
+                command = CreateCommandInstance(commandType, parameters ?? []);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = $"Impossibile istanziare il comando: {ex.Message}" });
+            }
+
+            var runId = Guid.NewGuid().ToString();
+            _dispatcher.Enqueue(
+                command,
+                runId: runId,
+                metadata: new Dictionary<string, string>
+                {
+                    ["commandName"] = command.CommandName,
+                    ["source"] = "generic_api"
+                },
+                priority: command.Priority);
+
+            return Ok(new { runId, commandName = command.CommandName });
+        }
+
+        // ─── Helpers ────────────────────────────────────────────────────────────
+
+        private static IReadOnlyList<Type> DiscoverCommandTypes()
+        {
+            return typeof(ICommand).Assembly
+                .GetTypes()
+                .Where(t => t.IsClass && !t.IsAbstract && typeof(ICommand).IsAssignableFrom(t))
+                .OrderBy(t => t.Name)
+                .ToList();
+        }
+
+        private static string ComputeCommandName(Type commandType)
+        {
+            var name = commandType.Name.EndsWith("Command", StringComparison.OrdinalIgnoreCase)
+                ? commandType.Name[..^7]
+                : commandType.Name;
+            return CommandExecutionFunction.ToSnakeCase(name);
+        }
+
+        private static Type? FindCommandTypeByName(string commandName)
+        {
+            return _commandTypes.FirstOrDefault(t =>
+                string.Equals(ComputeCommandName(t), commandName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, commandName + "Command", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, commandName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private ICommand CreateCommandInstance(Type commandType, Dictionary<string, JsonElement> parameters)
+        {
+            var ctors = commandType.GetConstructors()
+                .OrderByDescending(c => c.GetParameters().Length)
+                .ToList();
+
+            var errors = new List<string>();
+
+            foreach (var ctor in ctors)
+            {
+                var ctorParams = ctor.GetParameters();
+                var args = new object?[ctorParams.Length];
+                bool canInstantiate = true;
+                var missing = new List<string>();
+
+                for (int i = 0; i < ctorParams.Length; i++)
+                {
+                    var param = ctorParams[i];
+
+                    // 1. Try to resolve from DI
+                    var svc = _serviceProvider.GetService(param.ParameterType);
+                    if (svc != null)
+                    {
+                        args[i] = svc;
+                        continue;
+                    }
+
+                    // 2. Try to match from body parameters (case-insensitive)
+                    var bodyKey = parameters.Keys.FirstOrDefault(k =>
+                        string.Equals(k, param.Name, StringComparison.OrdinalIgnoreCase));
+                    if (bodyKey != null)
+                    {
+                        try
+                        {
+                            args[i] = JsonSerializer.Deserialize(
+                                parameters[bodyKey].GetRawText(),
+                                param.ParameterType,
+                                _jsonOptions);
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            missing.Add($"{param.Name} (errore conversione: {ex.Message})");
+                            canInstantiate = false;
+                            break;
+                        }
+                    }
+
+                    // 3. Use default value if available
+                    if (param.HasDefaultValue)
+                    {
+                        args[i] = param.DefaultValue;
+                        continue;
+                    }
+
+                    missing.Add($"{param.ParameterType.Name} {param.Name}");
+                    canInstantiate = false;
+                    break;
+                }
+
+                if (canInstantiate)
+                    return (ICommand)ctor.Invoke(args);
+
+                errors.Add($"[{ctorParams.Length} params] mancano: {string.Join(", ", missing)}");
+            }
+
+            throw new InvalidOperationException(
+                $"Nessun costruttore applicabile per {commandType.Name}. {string.Join("; ", errors)}");
         }
     }
 

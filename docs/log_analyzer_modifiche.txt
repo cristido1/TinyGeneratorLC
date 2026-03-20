@@ -1,0 +1,224 @@
+TITOLO: LOG ANALYZER OTTIMIZZATO (RIDUZIONE TOKEN + ANALISI OFFLINE)
+
+OBIETTIVO
+Ridurre drasticamente i token utilizzati dal log analyzer mantenendo la qualità dell’analisi.
+Il log analyzer NON è parte del ciclo runtime, ma lavora offline su log già prodotti.
+
+PROBLEMA ATTUALE
+- Vengono passati log completi (request + response + checker)
+- Elevato consumo token (fino a migliaia per comando)
+- Ridondanza elevata (retry simili, errori ripetuti)
+- LLM usato anche per parsing → inefficiente
+
+NOTA:
+Analisi di settore confermano che log grezzi possono consumare migliaia di token inutilmente e che la riduzione preventiva può abbattere i costi fino al 90% (token optimization e log reduction) :contentReference[oaicite:0]{index=0}
+
+----------------------------------------
+
+ARCHITETTURA TARGET
+
+Pipeline:
+
+LOG RAW
+→ PREPROCESSING (C#)
+→ AGGREGAZIONE ERRORI
+→ INPUT COMPATTO
+→ LLM ANALYZER (offline)
+
+----------------------------------------
+
+FASE 1: FILTRAGGIO LOG
+
+TENERE SOLO:
+- response_checker con is_valid = false
+- errori deterministici
+- eventuale ultima risposta valida
+
+SCARTARE:
+- tutte le request
+- tutte le response intermedie valide
+- duplicati
+
+RISULTATO:
+riduzione immediata 70–90% token
+
+----------------------------------------
+
+FASE 2: NORMALIZZAZIONE ERRORI
+
+Convertire i reason in formato compatto:
+
+INPUT:
+"Violazione regola 3: presenza di tag alarm, cry, breath"
+
+OUTPUT:
+R3: alarm, cry, breath
+
+REGOLE:
+- R3 = rule 3
+- R5 = rule 5
+- R6 = rule 6
+- lowercase sempre
+- rimuovere testo inutile
+
+----------------------------------------
+
+FASE 3: ESTRAZIONE TAG
+
+Parsing lato C#:
+
+Esempio:
+R3: alarm, cry, breath
+
+→ array:
+["alarm", "cry", "breath"]
+
+----------------------------------------
+
+FASE 4: AGGREGAZIONE
+
+Contare frequenze:
+
+Esempio:
+
+R3:
+alarm x6
+cry x6
+breath x4
+
+R5:
+silence x5
+metal x4
+
+R6:
+voice x2
+darkness x2
+
+OUTPUT:
+
+R3: alarm (x6), cry (x6), breath (x4)
+R5: silence (x5), metal (x4)
+R6: voice (x2), darkness (x2)
+
+----------------------------------------
+
+FASE 5: DETECTION PATTERN
+
+Derivare metadati:
+
+- repeated_errors = true se count >= 3
+- converged = true se esiste risposta valida finale
+- total_retries = numero retry
+
+----------------------------------------
+
+FASE 6: COSTRUZIONE INPUT LLM
+
+Formato finale MINIMO:
+
+[COMMAND] <nome comando>
+
+[ERROR_SUMMARY]
+R3: alarm (x6), cry (x6), breath (x4)
+R5: silence (x5), metal (x4)
+
+[FINAL_SUCCESS]
+true | false
+
+[NOTES]
+Errors repeated across retries
+
+----------------------------------------
+
+PROMPT SYSTEM OTTIMIZZATO
+
+You analyze AI pipeline failures.
+
+Tasks:
+- identify main failure cause
+- suggest one action
+- detect possible misclassification
+
+Rules:
+- concise
+- no invention
+- state uncertainty
+
+Output:
+Failure reason:
+Confidence:
+Suggested action:
+
+----------------------------------------
+
+REGOLE DI RIDUZIONE TOKEN
+
+1) NON passare log raw
+2) NON passare request
+3) NON passare JSON completo
+4) NON passare duplicati
+5) NON passare retry identici
+
+Principio:
+LLM deve ricevere SOLO informazione distillata
+
+Best practice:
+Prompt engineering efficace richiede input strutturati e concisi, evitando over-prompting :contentReference[oaicite:1]{index=1}
+
+----------------------------------------
+
+RESPONSABILITÀ SISTEMA
+
+C#:
+- parsing log
+- normalizzazione
+- aggregazione
+- compressione
+
+LLM:
+- analisi semantica
+- suggerimento azione
+
+----------------------------------------
+
+RISULTATI ATTESI
+
+Token per analisi:
+DA: 4000–8000
+A: 200–400
+
+Benefici:
+- riduzione costi
+- aumento velocità
+- maggiore stabilità vLLM
+- migliore qualità analisi (meno rumore)
+
+----------------------------------------
+
+ERRORI DA EVITARE
+
+- usare LLM per parsing
+- passare log completi
+- duplicare informazioni
+- mescolare livelli (raw + sintesi)
+- includere request inutili
+
+----------------------------------------
+
+ESTENSIONI FUTURE (non fare)
+
+- clustering errori per tipo
+- storico errori per modello
+- ranking problemi più frequenti
+- suggerimenti automatici di prompt fix
+
+----------------------------------------
+
+CONCLUSIONE
+
+Il log analyzer deve lavorare su:
+DATI COMPRESSI E STRUTTURATI
+
+NON su log grezzi.
+
+La qualità dell’analisi dipende più dal preprocessing che dal modello.

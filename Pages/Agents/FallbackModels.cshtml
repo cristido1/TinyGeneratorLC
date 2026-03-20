@@ -1,0 +1,845 @@
+@page
+@model TinyGenerator.Pages.Agents.FallbackModelsModel
+@{
+    ViewData["Title"] = "Fallback models";
+    ViewData["PageDescription"] = "Gestione modelli di fallback per i ruoli";
+}
+
+<style>
+    .btn-group-vertical>.btn, .btn-group>.btn {
+        flex: none;
+    }
+
+    #fallbackTable {
+        font-size: 0.9rem;
+    }
+
+    #fallbackTable thead th {
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 0.75rem;
+        border-bottom: 2px solid #dee2e6;
+    }
+
+    #fallbackTable tbody td {
+        padding: 0.75rem;
+        vertical-align: middle;
+    }
+
+    #fallbackTable tbody tr:hover {
+        background-color: #f8f9fa;
+    }
+
+    #fallbackTable tbody tr.odd,
+    #fallbackTable tbody tr.even {
+        background-color: transparent;
+    }
+
+    #fallbackTable tbody tr.fallback-disabled-row > td {
+        background-color: #e9ecef !important;
+    }
+
+    #fallbackTable tbody tr.fallback-disabled-row:hover > td {
+        background-color: #dde2e6 !important;
+    }
+
+    .dt-buttons .btn {
+        font-size: 0.875rem;
+        padding: 0.375rem 0.75rem;
+    }
+
+    .dataTables_filter input {
+        margin-left: 0.5rem;
+        border-radius: 0.25rem;
+    }
+
+    .dataTables_paginate .pagination {
+        margin-bottom: 0;
+    }
+
+    .dataTables_info {
+        font-size: 0.875rem;
+        color: #6c757d;
+    }
+
+    .table-container {
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        padding: 1rem;
+        background: white;
+    }
+
+    /* Success-rate highlighting (applies only when the model role has results) */
+    .fallback-rate-good { color: var(--bs-success); }
+    .fallback-rate-mid { color: var(--bs-warning); }
+    .fallback-rate-bad { color: var(--bs-danger); }
+    .bg-orange { background-color: #fd7e14 !important; color: #212529 !important; }
+
+</style>
+
+<div class="mb-3">
+    <p class="text-muted">Configura modelli di fallback. Se un agente fallisce dopo tutti i retry, il sistema prova modelli alternativi ordinati per percentuale di successo.</p>
+</div>
+
+<div id="fallbackMessage" class="alert d-none" role="alert"></div>
+
+<div class="mb-3 d-flex justify-content-end">
+    <button type="button" class="btn btn-sm btn-outline-primary" id="btnPromoteAllModels">
+        Promuovi migliori modelli (tutti i ruoli)
+    </button>
+</div>
+
+<form id="fallbackAddForm" class="mb-3 border p-3 rounded bg-light">
+    @Html.AntiForgeryToken()
+    <h6 class="mb-3">Add fallback model role</h6>
+    <div class="row g-2">
+        <div class="col-md-3">
+            <label class="form-label small">Model</label>
+            <select name="modelId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var m in Model.Models)
+                {
+                    <option value="@m.Id">@m.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small">Role</label>
+            <select name="roleId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var r in Model.AllRoles)
+                {
+                    <option value="@r.Id">@r.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small">Agent</label>
+            <select name="agentId" class="form-select form-select-sm" required>
+                <option value="">-- Select --</option>
+                @foreach (var a in Model.Agents)
+                {
+                    <option value="@a.Id">@a.Name (@a.Role)</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small">Instructions</label>
+            <input type="text" name="instructions" class="form-control form-control-sm" placeholder="Optional" />
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small">Top-P</label>
+            <input type="number" name="topP" class="form-control form-control-sm" step="0.01" min="0" max="1" placeholder="0.9" />
+        </div>
+        <div class="col-md-1">
+            <label class="form-label small">Top-K</label>
+            <input type="number" name="topK" class="form-control form-control-sm" step="1" min="0" placeholder="40" />
+        </div>
+        <div class="col-md-2">
+            <label class="form-label small">Thinking</label>
+            <select name="thinking" class="form-select form-select-sm">
+                <option value="">null (default)</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+            </select>
+        </div>
+        <div class="col-md-1 d-flex align-items-center">
+            <div class="form-check mt-4">
+                <input type="checkbox" name="enabled" class="form-check-input" checked />
+                <label class="form-check-label small">Enabled</label>
+            </div>
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-sm btn-success w-100">Add</button>
+        </div>
+    </div>
+</form>
+
+<div class="table-container">
+    <table class="table table-sm table-hover mb-0" id="fallbackTable">
+        <thead>
+            <tr>
+                <th></th>
+                <th data-col="model">Model</th>
+                <th data-col="role">Role</th>
+                <th data-col="agent">Agent</th>
+                <th data-col="primary">Primary</th>
+                <th data-col="use">Use</th>
+                <th data-col="success">Success</th>
+                <th data-col="failed">Failed</th>
+                <th data-col="prompttokens">P.Tok</th>
+                <th data-col="outputtokens">O.Tok</th>
+                <th data-col="gentps">Gen TPS</th>
+                <th data-col="speedindex">Speed Index</th>
+                <th data-col="prompttps">Prompt TPS</th>
+                <th data-col="e2etps">E2E TPS</th>
+                <th data-col="loadratio">Load %</th>
+                <th data-col="rate">%</th>
+                <th data-col="thinking">Thinking</th>
+                <th data-col="lastuse">Last Use</th>
+                <th data-col="enabled">Enabled</th>
+                <th data-col="actions">Azioni</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var mr in Model.ModelRoles)
+            {
+                var hasResults = mr.UseCount > 0;
+                var pct = mr.SuccessRate * 100.0;
+                var level = !hasResults
+                    ? string.Empty
+                    : (pct > 80.0 ? "good" : (pct >= 60.0 ? "mid" : "bad"));
+                var textClass = level == "good"
+                    ? "fallback-rate-good"
+                    : (level == "mid" ? "fallback-rate-mid" : (level == "bad" ? "fallback-rate-bad" : string.Empty));
+                var roleBadgeClass = level == "good"
+                    ? "bg-success"
+                    : (level == "mid" ? "bg-warning text-dark" : (level == "bad" ? "bg-danger" : "bg-secondary"));
+                var toggleLabel = mr.Enabled ? "Disabilita" : "Abilita";
+                var speedIndex = Model.GetSpeedIndex(mr.Id);
+                var speedBadgeClass = speedIndex >= 8
+                    ? "bg-success"
+                    : (speedIndex >= 5 ? "bg-warning text-dark" : (speedIndex >= 3 ? "bg-orange text-dark" : "bg-danger"));
+                <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")" class="@(mr.Enabled ? string.Empty : "fallback-disabled-row")">
+                    <td class="dt-control"></td>
+                    <td data-col="model"><strong class="@textClass">@mr.Model?.Name</strong></td>
+                    <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Name</span></td>
+                    <td data-col="agent">@mr.Agent?.Name</td>
+                    <td data-col="primary">@(mr.IsPrimary ? "Yes" : "No")</td>
+                    <td data-col="use">@mr.UseCount</td>
+                    <td data-col="success" class="text-success">@mr.UseSuccessed</td>
+                    <td data-col="failed" class="text-danger">@mr.UseFailed</td>
+                    <td data-col="prompttokens">@mr.TotalPromptTokens</td>
+                    <td data-col="outputtokens">@mr.TotalOutputTokens</td>
+                    <td data-col="gentps">@((mr.AvgGenTps > 0) ? mr.AvgGenTps.ToString("0.00") : "-")</td>
+                    <td data-col="speedindex"><span class="badge @speedBadgeClass">@speedIndex</span></td>
+                    <td data-col="prompttps">@((mr.AvgPromptTps > 0) ? mr.AvgPromptTps.ToString("0.00") : "-")</td>
+                    <td data-col="e2etps">@((mr.AvgE2eTps > 0) ? mr.AvgE2eTps.ToString("0.00") : "-")</td>
+                    <td data-col="loadratio">@((mr.LoadRatio > 0) ? (mr.LoadRatio * 100.0).ToString("0.0") + "%" : "-")</td>
+                    <td data-col="rate"><span class="@textClass">@((mr.SuccessRate * 100).ToString("0.0"))%</span></td>
+                    <td data-col="thinking">@(mr.Thinking.HasValue ? (mr.Thinking.Value ? "true" : "false") : "null")</td>
+                    <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
+                    <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
+                    <td data-col="actions">
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <button type="button" class="dropdown-item" data-action="edit">Modifica</button>
+                                </li>
+                                <li>
+                                    <button type="button" class="dropdown-item" data-action="toggle-enabled">@toggleLabel</button>
+                                </li>
+                                @if (!mr.IsPrimary)
+                                {
+                                    <li>
+                                        <button type="button" class="dropdown-item" data-action="delete">Elimina</button>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<div class="modal fade" id="editFallbackModal" tabindex="-1" aria-labelledby="editFallbackModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editFallbackModalLabel">Modifica fallback model_role</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-id" />
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label class="form-label small">Modello</label>
+                        <input type="text" id="edit-model" class="form-control form-control-sm" readonly />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Ruolo</label>
+                        <input type="text" id="edit-role" class="form-control form-control-sm" readonly />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Top-P</label>
+                        <input type="number" id="edit-topP" class="form-control form-control-sm" step="0.01" min="0" max="1" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small">Top-K</label>
+                        <input type="number" id="edit-topK" class="form-control form-control-sm" step="1" min="0" />
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label small">Thinking</label>
+                        <select id="edit-thinking" class="form-select form-select-sm">
+                            <option value="">null (default)</option>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                        </select>
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label small">Instructions</label>
+                        <textarea id="edit-instructions" class="form-control form-control-sm" rows="4"></textarea>
+                    </div>
+                    <div class="col-md-12">
+                        <div class="form-check mt-2">
+                            <input type="checkbox" id="edit-enabled" class="form-check-input" />
+                            <label class="form-check-label small" for="edit-enabled">Enabled</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Annulla</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-save-edit">Salva</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function initDataTable() {
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            if (typeof $.fn.DataTable === 'undefined') {
+                console.error('DataTables non caricato');
+                return;
+            }
+
+            var table = $('#fallbackTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-4'B><'col-sm-4'l><'col-sm-4 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'i><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]], // Added lengthMenu for selecting number of records per page
+                order: [[15, 'desc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo fallback',
+                        className: 'btn btn-sm btn-primary',
+                        attr: {
+                            style: 'width: auto; flex: 0 0 auto;'
+                        },
+                        action: function() {
+                            var form = document.getElementById('fallbackAddForm');
+                            if (form) {
+                                form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                var firstSelect = form.querySelector('select[name="modelId"]');
+                                if (firstSelect) firstSelect.focus();
+                            }
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary'
+                    }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record", // Updated language for lengthMenu
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: {
+                        first: "Prima",
+                        last: "Ultima",
+                        next: "Succ",
+                        previous: "Prec"
+                    }
+                }
+            });
+
+            var form = document.getElementById('fallbackAddForm');
+            var messageBox = document.getElementById('fallbackMessage');
+            var tokenEl = document.querySelector('input[name="__RequestVerificationToken"]');
+            var antiforgeryToken = tokenEl ? tokenEl.value : '';
+
+            function getHeaders() {
+                var headers = { 'Content-Type': 'application/json' };
+                if (antiforgeryToken) {
+                    headers['RequestVerificationToken'] = antiforgeryToken;
+                }
+                return headers;
+            }
+
+            function escapeHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+                function showMessage(type, text) {
+                if (!messageBox) return;
+                messageBox.className = 'alert alert-' + type;
+                messageBox.textContent = text;
+                messageBox.classList.remove('d-none');
+            }
+
+            function clearMessage() {
+                if (!messageBox) return;
+                messageBox.classList.add('d-none');
+                messageBox.textContent = '';
+                }
+
+            var promoteAllBtn = document.getElementById('btnPromoteAllModels');
+            if (promoteAllBtn) {
+                promoteAllBtn.addEventListener('click', async function () {
+                    clearMessage();
+                    if (!confirm('Confermi la promozione del modello migliore su tutti i ruoli attivi?')) return;
+                    promoteAllBtn.disabled = true;
+                    try {
+                        var resp = await fetch('?handler=PromoteAll', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            credentials: 'same-origin'
+                        });
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore promozione');
+                        }
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore promozione');
+                        showMessage('success', 'Promozione completata. Modelli aggiornati: ' + (result.promoted || 0) + ' su ' + (result.examined || 0) + ' agenti valutati.');
+                        window.location.reload();
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore promozione');
+                    } finally {
+                        promoteAllBtn.disabled = false;
+                    }
+                });
+            }
+
+                function parseNullableBool(value) {
+                    if (value === null || value === undefined) return null;
+                    var v = String(value).trim().toLowerCase();
+                    if (v === 'true' || v === '1' || v === 'yes') return true;
+                    if (v === 'false' || v === '0' || v === 'no') return false;
+                    return null;
+                }
+
+                function formatFloat(value, decimals) {
+                    var num = Number(value);
+                    if (!isFinite(num) || num <= 0) return '-';
+                    return num.toFixed(decimals);
+                }
+
+                function buildRowHtml(row) {
+                var useCount = parseInt(row.useCount || '0', 10) || 0;
+                var pct = row.successRate === null || row.successRate === undefined || row.successRate === '' ? NaN : parseFloat(row.successRate);
+                var level = '';
+                if (useCount > 0 && !isNaN(pct)) {
+                    level = pct > 80 ? 'good' : (pct >= 60 ? 'mid' : 'bad');
+                }
+
+                var textClass = level === 'good'
+                    ? 'fallback-rate-good'
+                    : (level === 'mid' ? 'fallback-rate-mid' : (level === 'bad' ? 'fallback-rate-bad' : ''));
+
+                var roleBadgeClass = level === 'good'
+                    ? 'bg-success'
+                    : (level === 'mid' ? 'bg-warning text-dark' : (level === 'bad' ? 'bg-danger' : 'bg-secondary'));
+
+                var toggleLabel = row.enabled ? 'Disabilita' : 'Abilita';
+                var speedIndex = Number(row.speedIndex || 1);
+                if (!isFinite(speedIndex)) speedIndex = 1;
+                speedIndex = Math.max(1, Math.min(10, Math.round(speedIndex)));
+                var speedBadgeClass = speedIndex >= 8
+                    ? 'bg-success'
+                    : (speedIndex >= 5 ? 'bg-warning text-dark' : (speedIndex >= 3 ? 'bg-orange text-dark' : 'bg-danger'));
+                var deleteLi = row.isPrimary
+                    ? ''
+                    : '<li><button type="button" class="dropdown-item" data-action="delete">Elimina</button></li>';
+
+                var rowClass = row.enabled ? '' : ' class="fallback-disabled-row"';
+                return '<tr data-id="' + row.id + '" data-enabled="' + (row.enabled ? 'true' : 'false') + '"' + rowClass + '>' +
+                    '<td class="dt-control"></td>' +
+                    '<td data-col="model"><strong class="' + escapeHtml(textClass) + '">' + escapeHtml(row.modelName) + '</strong></td>' +
+                    '<td data-col="role"><span class="badge ' + escapeHtml(roleBadgeClass) + '">' + escapeHtml(row.roleName) + '</span></td>' +
+                    '<td data-col="agent">' + escapeHtml(row.agentName || '') + '</td>' +
+                    '<td data-col="primary">' + (row.isPrimary ? 'Yes' : 'No') + '</td>' +
+                    '<td data-col="use">' + escapeHtml(row.useCount) + '</td>' +
+                    '<td data-col="success" class="text-success">' + escapeHtml(row.useSuccessed) + '</td>' +
+                    '<td data-col="failed" class="text-danger">' + escapeHtml(row.useFailed) + '</td>' +
+                    '<td data-col="prompttokens">' + escapeHtml(row.totalPromptTokens) + '</td>' +
+                    '<td data-col="outputtokens">' + escapeHtml(row.totalOutputTokens) + '</td>' +
+                    '<td data-col="gentps">' + escapeHtml(formatFloat(row.avgGenTps, 2)) + '</td>' +
+                    '<td data-col="speedindex"><span class="badge ' + escapeHtml(speedBadgeClass) + '">' + escapeHtml(speedIndex) + '</span></td>' +
+                    '<td data-col="prompttps">' + escapeHtml(formatFloat(row.avgPromptTps, 2)) + '</td>' +
+                    '<td data-col="e2etps">' + escapeHtml(formatFloat(row.avgE2eTps, 2)) + '</td>' +
+                    '<td data-col="loadratio">' + (Number(row.loadRatio || 0) > 0 ? escapeHtml((Number(row.loadRatio) * 100).toFixed(1) + '%') : '-') + '</td>' +
+                    '<td data-col="rate"><span class="' + escapeHtml(textClass) + '">' + escapeHtml(row.successRate) + '%</span></td>' +
+                    '<td data-col="thinking">' + escapeHtml(row.thinking === null || row.thinking === undefined ? 'null' : (row.thinking ? 'true' : 'false')) + '</td>' +
+                    '<td data-col="lastuse">' + escapeHtml(row.lastUse) + '</td>' +
+                    '<td data-col="enabled">' + (row.enabled ? 'Yes' : 'No') + '</td>' +
+                    '<td data-col="actions">' +
+                        '<div class="dropdown">' +
+                            '<button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>' +
+                            '<ul class="dropdown-menu dropdown-menu-end">' +
+                                '<li><button type="button" class="dropdown-item" data-action="edit">Modifica</button></li>' +
+                                '<li><button type="button" class="dropdown-item" data-action="toggle-enabled">' + escapeHtml(toggleLabel) + '</button></li>' +
+                                deleteLi +
+                            '</ul>' +
+                        '</div>' +
+                    '</td>' +
+                '</tr>';
+            }
+
+            if (form) {
+                form.addEventListener('submit', async function (ev) {
+                    ev.preventDefault();
+                    clearMessage();
+
+                    var payload = {
+                        modelId: parseInt(form.modelId.value || '0', 10),
+                        roleId: parseInt(form.roleId.value || '0', 10),
+                        agentId: parseInt(form.agentId.value || '0', 10),
+                        instructions: form.instructions.value || null,
+                        topP: form.topP.value ? parseFloat(form.topP.value) : null,
+                        topK: form.topK.value ? parseInt(form.topK.value, 10) : null,
+                        thinking: parseNullableBool(form.thinking.value),
+                        enabled: !!form.enabled.checked
+                    };
+
+                    try {
+                        var resp = await fetch('?handler=Add', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify(payload),
+                            credentials: 'same-origin'
+                        });
+
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore inserimento');
+                        }
+
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore inserimento');
+
+                        if (result.row) {
+                            var newRow = $(buildRowHtml(result.row));
+                            table.row.add(newRow).draw(false);
+                        }
+
+                        form.reset();
+                        form.enabled.checked = true;
+                        showMessage('success', 'Fallback model aggiunto.');
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore inserimento');
+                    }
+                });
+            }
+
+            var tableElement = document.getElementById('fallbackTable');
+            if (tableElement && tableElement.tBodies.length > 0) {
+                tableElement.tBodies[0].addEventListener('click', async function (ev) {
+                    var target = ev.target;
+                    if (!target) return;
+
+                    var action = target.getAttribute('data-action') || '';
+                    if (action !== 'delete' && action !== 'toggle-enabled' && action !== 'edit') return;
+
+                    var rowEl = target.closest('tr');
+                    if (!rowEl) return;
+                    var id = parseInt(rowEl.getAttribute('data-id') || '0', 10);
+                    if (!id) return;
+
+                    try {
+                        if (action === 'delete') {
+                            if (!confirm('Confermi eliminazione?')) return;
+                            clearMessage();
+
+                            var resp = await fetch('?handler=Delete', {
+                                method: 'POST',
+                                headers: getHeaders(),
+                                body: JSON.stringify({ id: id }),
+                                credentials: 'same-origin'
+                            });
+                            if (!resp.ok) {
+                                var errText = await resp.text();
+                                throw new Error(errText || 'Errore eliminazione');
+                            }
+                            var result = await resp.json();
+                            if (!result.ok) throw new Error(result.error || 'Errore eliminazione');
+
+                            table.row(rowEl).remove().draw(false);
+                            showMessage('success', 'Fallback model eliminato.');
+                            return;
+                        }
+
+                        if (action === 'toggle-enabled') {
+                            clearMessage();
+
+                            var currentEnabled = (rowEl.getAttribute('data-enabled') || '').toLowerCase() === 'true';
+                            var newEnabled = !currentEnabled;
+
+                            var respToggle = await fetch('?handler=ToggleEnabled', {
+                                method: 'POST',
+                                headers: getHeaders(),
+                                body: JSON.stringify({ id: id, enabled: newEnabled }),
+                                credentials: 'same-origin'
+                            });
+                            if (!respToggle.ok) {
+                                var errTextToggle = await respToggle.text();
+                                throw new Error(errTextToggle || 'Errore aggiornamento');
+                            }
+                            var resultToggle = await respToggle.json();
+                            if (!resultToggle.ok) throw new Error(resultToggle.error || 'Errore aggiornamento');
+
+                            var effectiveEnabled = !!resultToggle.enabled;
+                            rowEl.setAttribute('data-enabled', effectiveEnabled ? 'true' : 'false');
+                            rowEl.classList.toggle('fallback-disabled-row', !effectiveEnabled);
+
+                            var enabledCell = rowEl.querySelector('td[data-col="enabled"]');
+                            if (enabledCell) enabledCell.textContent = effectiveEnabled ? 'Yes' : 'No';
+
+                            var toggleBtn = rowEl.querySelector('button[data-action="toggle-enabled"]');
+                            if (toggleBtn) toggleBtn.textContent = effectiveEnabled ? 'Disabilita' : 'Abilita';
+
+                            showMessage('success', effectiveEnabled ? 'Modello abilitato.' : 'Modello disabilitato.');
+                            return;
+                        }
+
+                        if (action === 'edit') {
+                            clearMessage();
+                            var detailResp = await fetch('?handler=Detail&id=' + encodeURIComponent(id), { credentials: 'same-origin' });
+                            if (!detailResp.ok) {
+                                var detailErr = await detailResp.text();
+                                throw new Error(detailErr || 'Errore caricamento dettaglio');
+                            }
+                            var detail = await detailResp.json();
+
+                            document.getElementById('edit-id').value = String(detail.id || id);
+                            document.getElementById('edit-model').value = detail.modelName || '';
+                            document.getElementById('edit-role').value = detail.roleName || '';
+                            document.getElementById('edit-topP').value = (detail.topP === null || detail.topP === undefined) ? '' : String(detail.topP);
+                            document.getElementById('edit-topK').value = (detail.topK === null || detail.topK === undefined) ? '' : String(detail.topK);
+                            document.getElementById('edit-thinking').value = detail.thinking === null || detail.thinking === undefined ? '' : (detail.thinking ? 'true' : 'false');
+                            document.getElementById('edit-instructions').value = (detail.instructions && detail.instructions !== '-') ? detail.instructions : '';
+                            document.getElementById('edit-enabled').checked = !!detail.enabled;
+
+                            var modalEl = document.getElementById('editFallbackModal');
+                            var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                            modal.show();
+                        }
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore operazione');
+                    }
+                });
+            }
+
+            var saveEditBtn = document.getElementById('btn-save-edit');
+            if (saveEditBtn) {
+                saveEditBtn.addEventListener('click', async function () {
+                    clearMessage();
+                    var id = parseInt(document.getElementById('edit-id').value || '0', 10);
+                    if (!id) {
+                        showMessage('danger', 'Id non valido');
+                        return;
+                    }
+
+                    var payload = {
+                        id: id,
+                        instructions: document.getElementById('edit-instructions').value || null,
+                        topP: document.getElementById('edit-topP').value ? parseFloat(document.getElementById('edit-topP').value) : null,
+                        topK: document.getElementById('edit-topK').value ? parseInt(document.getElementById('edit-topK').value, 10) : null,
+                        thinking: parseNullableBool(document.getElementById('edit-thinking').value),
+                        enabled: !!document.getElementById('edit-enabled').checked
+                    };
+
+                    try {
+                        var resp = await fetch('?handler=Update', {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: JSON.stringify(payload),
+                            credentials: 'same-origin'
+                        });
+                        if (!resp.ok) {
+                            var errText = await resp.text();
+                            throw new Error(errText || 'Errore salvataggio');
+                        }
+                        var result = await resp.json();
+                        if (!result.ok) throw new Error(result.error || 'Errore salvataggio');
+
+                        var modalEl = document.getElementById('editFallbackModal');
+                        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+                        modal.hide();
+                        showMessage('success', 'Fallback aggiornato.');
+                        window.location.reload();
+                    } catch (err) {
+                        showMessage('danger', err.message || 'Errore salvataggio');
+                    }
+                });
+            }
+
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
+                }
+
+                var id = $tr.data('id');
+                if (!id) return;
+
+                fetch('?handler=Detail&id=' + encodeURIComponent(id))
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var instructions = data.instructions || '-';
+                        var errorsContainerId = 'mr-errors-' + String(data.id || id);
+                        var html = '<div class="card"><div class="card-body">' +
+                            '<h5 class="card-title">' + escapeHtml(data.title || '') + '</h5>' +
+                            '<div class="small text-muted mb-2">' +
+                                'Modello: <strong>' + escapeHtml(data.modelName || '-') + '</strong> | ' +
+                                'Ruolo: <strong>' + escapeHtml(data.roleName || '-') + '</strong> | ' +
+                                'Primary: <strong>' + (data.isPrimary ? 'Yes' : 'No') + '</strong>' +
+                            '</div>' +
+                            '<div class="mb-2"><div class="fw-semibold">Istruzioni</div><pre class="mb-0" style="white-space: pre-wrap;">' + escapeHtml(instructions) + '</pre></div>' +
+                            '<div class="mt-3"><div class="fw-semibold mb-2">Errori (ultimi per data_last)</div><div id="' + escapeHtml(errorsContainerId) + '" class="small text-muted">Caricamento errori...</div></div>' +
+                            '<div class="mt-2"><div class="fw-semibold">Dettagli</div><pre class="mb-0" style="white-space: pre-wrap;">' + escapeHtml(data.description || '') + '</pre></div>' +
+                            '</div></div>';
+                        row.child(html).show();
+                        $tr.addClass('shown');
+
+                        fetch('?handler=Errors&id=' + encodeURIComponent(data.id || id) +
+                              '&modelId=' + encodeURIComponent(data.modelId || 0) +
+                              '&roleId=' + encodeURIComponent(data.roleId || 0), { credentials: 'same-origin' })
+                            .then(function(resp) { return resp.ok ? resp.json() : Promise.reject(new Error('Errore caricamento errori')); })
+                            .then(function(payload) {
+                                var target = document.getElementById(errorsContainerId);
+                                if (!target) return;
+                                var rows = payload && payload.rows ? payload.rows : [];
+                                if (!rows.length) {
+                                    target.innerHTML = '<span class="text-muted">Nessun errore registrato.</span>';
+                                    return;
+                                }
+
+                                var lines = rows.map(function(e) {
+                                    return '<tr>' +
+                                        '<td>' + escapeHtml(e.errorType || '-') + '</td>' +
+                                        '<td class="text-end">' + escapeHtml(String(e.errorCount || 0)) + '</td>' +
+                                        '<td>' + escapeHtml(e.dateLastFmt || '-') + '</td>' +
+                                        '<td><div style="white-space: pre-wrap;">' + escapeHtml(e.errorText || '-') + '</div></td>' +
+                                        '<td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-error" data-error-id="' + escapeHtml(String(e.id || 0)) + '">Elimina</button></td>' +
+                                    '</tr>';
+                                }).join('');
+
+                                target.innerHTML =
+                                    '<div class="table-responsive">' +
+                                        '<table class="table table-sm table-striped mb-0">' +
+                                            '<thead><tr><th>Type</th><th class="text-end">Count</th><th>Date Last</th><th>Error Text</th><th class="text-end">Azioni</th></tr></thead>' +
+                                            '<tbody>' + lines + '</tbody>' +
+                                        '</table>' +
+                                    '</div>';
+
+                                if (!target.dataset.deleteBound) {
+                                    target.addEventListener('click', async function(evt) {
+                                        var btn = evt.target && evt.target.closest ? evt.target.closest('button[data-action="delete-error"]') : null;
+                                        if (!btn) return;
+                                        var errorId = parseInt(btn.getAttribute('data-error-id') || '0', 10);
+                                        if (!errorId) return;
+                                        if (!confirm('Confermi eliminazione di questo errore?')) return;
+
+                                        try {
+                                            var delResp = await fetch('?handler=DeleteError', {
+                                                method: 'POST',
+                                                headers: getHeaders(),
+                                                body: JSON.stringify({ errorId: errorId }),
+                                                credentials: 'same-origin'
+                                            });
+
+                                            if (!delResp.ok) {
+                                                var delTxt = await delResp.text();
+                                                throw new Error(delTxt || 'Errore eliminazione');
+                                            }
+
+                                            var delResult = await delResp.json();
+                                            if (!delResult.ok) throw new Error(delResult.error || 'Errore eliminazione');
+
+                                            var tr = btn.closest('tr');
+                                            if (tr) tr.remove();
+                                            var tbody = target.querySelector('tbody');
+                                            if (!tbody || !tbody.querySelector('tr')) {
+                                                target.innerHTML = '<span class="text-muted">Nessun errore registrato.</span>';
+                                            }
+                                            showMessage('success', 'Errore eliminato.');
+                                        } catch (err) {
+                                            showMessage('danger', (err && err.message) ? err.message : 'Errore eliminazione');
+                                        }
+                                    });
+                                    target.dataset.deleteBound = '1';
+                                }
+                            })
+                            .catch(function() {
+                                var target = document.getElementById(errorsContainerId);
+                                if (target) {
+                                    target.innerHTML = '<span class="text-danger">Errore caricando la lista errori.</span>';
+                                }
+                            });
+                    });
+            });
+
+        });
+    }
+})();
+</script>

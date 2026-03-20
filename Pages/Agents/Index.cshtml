@@ -1,0 +1,275 @@
+@page
+@model TinyGenerator.Pages.Agents.IndexModel
+@{
+    ViewData["Title"] = "Agents";
+    ViewData["PageDescription"] = "Gestione agenti AI del sistema";
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/datatables/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/lib/datatables/css/buttons.bootstrap5.min.css" />
+}
+
+<div class="page-wrapper">
+    
+
+    <div class="border p-2 rounded" style="border:2px solid #ccc; border-radius:8px;">
+        <table class="table table-sm table-hover mb-0" id="agentsTable">
+            <thead class="table-light">
+                <tr>
+                    <th></th>
+                    <th data-col="name">Name</th>
+                    <th data-col="role">Role</th>
+                    <th data-col="model">Model</th>
+                    <th data-col="temp">Temp</th>
+                    <th data-col="topp">TopP</th>
+                    <th data-col="repeatpenalty">Repeat</th>
+                    <th data-col="topk">TopK</th>
+                    <th data-col="repeatlastn">Repeat N</th>
+                    <th data-col="numpredict">Predict</th>
+                    <th data-col="voice">Voice</th>
+                    <th data-col="skills">Skills</th>
+                    <th data-col="multistep">MultiStep Template</th>
+                    <th data-col="json">JSON Format</th>
+                    <th data-col="active">Active</th>
+                    <th data-col="actions">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var agent in Model.Items)
+                {
+                    <tr data-id="@agent.Id" data-name="@agent.Name" data-role="@agent.Role">
+                        <td class="dt-control"></td>
+                        <td data-col="name">@agent.Name</td>
+                        <td data-col="role">@agent.Role</td>
+                        <td data-col="model">@(!string.IsNullOrWhiteSpace(agent.ModelName) ? agent.ModelName : agent.ModelId?.ToString() ?? "-")</td>
+                        <td data-col="temp">@((agent.Temperature.HasValue) ? agent.Temperature.Value.ToString("0.00") : "-")</td>
+                        <td data-col="topp">@((agent.TopP.HasValue) ? agent.TopP.Value.ToString("0.00") : "-")</td>
+                        <td data-col="repeatpenalty">@((agent.RepeatPenalty.HasValue) ? agent.RepeatPenalty.Value.ToString("0.00") : "-")</td>
+                        <td data-col="topk">@((agent.TopK.HasValue) ? agent.TopK.Value.ToString() : "-")</td>
+                        <td data-col="repeatlastn">@((agent.RepeatLastN.HasValue) ? agent.RepeatLastN.Value.ToString() : "-")</td>
+                        <td data-col="numpredict">@((agent.NumPredict.HasValue) ? agent.NumPredict.Value.ToString() : "-")</td>
+                        <td data-col="voice">@(!string.IsNullOrWhiteSpace(agent.VoiceName) ? agent.VoiceName : agent.VoiceId?.ToString() ?? "-")</td>
+                        <td data-col="skills">@agent.Skills</td>
+                        <td data-col="multistep">@(!string.IsNullOrWhiteSpace(agent.MultiStepTemplateName) ? agent.MultiStepTemplateName : "-")</td>
+                        <td data-col="json">@agent.JsonResponseFormat</td>
+                        <td data-col="active">@(agent.IsActive ? "Yes" : "No")</td>
+                        <td data-col="actions">
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    @foreach (var action in Model.GetActionsForAgent(agent))
+                                    {
+                                        if (action.Method == "GET")
+                                        {
+                                            <li>
+                                                <a class="dropdown-item js-nav" href="@action.Url" data-url="@action.Url">@action.Title</a>
+                                            </li>
+                                        }
+                                        else if (action.Method == "POST")
+                                        {
+                                            <li>
+                                                <form method="post" action="@action.Url" class="m-0" onsubmit="return @(action.Confirm ? "confirm('Are you sure?')" : "true")">
+                                                    @Html.AntiForgeryToken()
+                                                    @foreach (var field in action.Fields)
+                                                    {
+                                                        <input type="hidden" name="@field.Key" value="@field.Value" />
+                                                    }
+                                                    <button type="submit" class="dropdown-item">@action.Title</button>
+                                                </form>
+                                            </li>
+                                        }
+                                        else if (action.Method == "CLIENT")
+                                        {
+                                            var agentId = action.Fields.ContainsKey("agentId") ? action.Fields["agentId"] : "";
+                                            var agentName = action.Fields.ContainsKey("agentName") ? action.Fields["agentName"] : "";
+                                            <li><button type="button" class="dropdown-item action-generate" data-agent-id="@agentId" data-agent-name="@agentName">@action.Title</button></li>
+                                        }
+                                    }
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Story Generation Modal -->
+<div class="modal fade" id="storyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Generate Story</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" asp-page-handler="GenerateStory" id="storyForm">
+                @Html.AntiForgeryToken()
+                <div class="modal-body">
+                    <input type="hidden" name="AgentId" id="modalAgentId" />
+                    <div class="mb-3">
+                        <label for="storyThemeInput" class="form-label">Story Theme</label>
+                        <textarea class="form-control" id="storyThemeInput" name="StoryTheme" rows="3" placeholder="Describe the story theme..." required></textarea>
+                        <div class="form-text">What should the story be about?</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Generate Story</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+(function initDataTable() {
+    // Aspetta che jQuery sia disponibile
+    if (typeof jQuery === 'undefined') {
+        setTimeout(initDataTable, 50);
+        return;
+    }
+
+    // Carica gli script DataTables in sequenza (non parallelo!)
+    var scripts = [
+        '/lib/datatables/js/jquery.dataTables.min.js',
+        '/lib/datatables/js/dataTables.bootstrap5.min.js',
+        '/lib/datatables/js/dataTables.buttons.min.js',
+        '/lib/datatables/js/buttons.bootstrap5.min.js',
+        '/lib/datatables/js/buttons.colVis.min.js'
+    ];
+
+    var currentScriptIndex = 0;
+
+    function loadScript(url, callback) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.onload = callback;
+        script.onerror = function() {
+            console.error('Failed to load script:', url);
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+
+    function loadNextScript() {
+        if (currentScriptIndex < scripts.length) {
+            loadScript(scripts[currentScriptIndex], function() {
+                currentScriptIndex++;
+                loadNextScript();
+            });
+        } else {
+            initializeDataTable();
+        }
+    }
+
+    loadNextScript();
+
+    function initializeDataTable() {
+        jQuery(document).ready(function($) {
+            console.log('Init DataTable - jQuery:', typeof $, 'DataTable:', typeof $.fn.DataTable);
+            
+            if (typeof $.fn.DataTable === 'undefined') {
+                console.error('DataTables non caricato');
+                return;
+            }
+
+            var table = $('#agentsTable').DataTable({
+                dom: "<'row mb-2'<'col-sm-6'B><'col-sm-6 text-end'f>>" +
+                     "rt" +
+                     "<'row mt-2'<'col-sm-6'il><'col-sm-6 text-end'p>>",
+                stateSave: true,
+                paging: true,
+                pageLength: 25,
+                lengthChange: true,
+                lengthMenu: [[10, 25, 50, 100], [10, 25, 50, 100]],
+                order: [[1, 'asc']],
+                ordering: true,
+                searching: true,
+                columnDefs: [
+                    { className: 'dt-control', orderable: false, targets: 0 },
+                    { orderable: false, targets: -1 }
+                ],
+                buttons: [
+                    {
+                        text: '<i class="bi bi-plus-circle me-1"></i>Nuovo Agent',
+                        className: 'btn btn-sm btn-primary',
+                        attr: {
+                            style: 'width: auto; flex: 0 0 auto;'
+                        },
+                        action: function() {
+                            window.location.href = '/Agents/Create';
+                        }
+                    },
+                    {
+                        extend: 'colvis',
+                        text: 'Colonne',
+                        className: 'btn btn-sm btn-secondary'
+                    }
+                ],
+                language: {
+                    search: "Cerca:",
+                    lengthMenu: "Mostra _MENU_ record",
+                    info: "Showing _START_ to _END_ of _TOTAL_ entries",
+                    infoEmpty: "Nessun record disponibile",
+                    infoFiltered: "(filtrati da _MAX_ record totali)",
+                    zeroRecords: "Nessun record trovato",
+                    paginate: {
+                        first: "Prima",
+                        last: "Ultima",
+                        next: "Succ",
+                        previous: "Prec"
+                    }
+                }
+            });
+
+            console.log('DataTable inizializzata:', table);
+
+            // Child row expansion
+            table.on('click', 'td.dt-control', function () {
+                var $tr = $(this).closest('tr');
+                var row = table.row($tr);
+
+                if (row.child.isShown()) {
+                    row.child.hide();
+                    $tr.removeClass('shown');
+                    return;
+                }
+
+                var id = $tr.data('id');
+                if (!id) return;
+
+                fetch('/api/agents/details/' + id)
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        var html = '<div class="card"><div class="card-body">' +
+                            '<h5>' + (data.title || '') + '</h5>' +
+                            '<p style="white-space: pre-wrap;">' + (data.description || '') + '</p>' +
+                            '</div></div>';
+                        row.child(html).show();
+                        $tr.addClass('shown');
+                    });
+            });
+
+            // Generate story modal
+            $(document).on('click', '.action-generate', function() {
+                var agentId = $(this).data('agent-id');
+                var agentName = $(this).data('agent-name');
+                $('#modalAgentId').val(agentId);
+                $('#storyModal .modal-title').text('Generate Story - ' + agentName);
+                new bootstrap.Modal(document.getElementById('storyModal')).show();
+            });
+
+            // Robust navigation for GET dropdown actions (prevents accidental postbacks)
+            $(document).on('click', 'a.dropdown-item.js-nav', function(e) {
+                var url = $(this).data('url') || $(this).attr('href');
+                if (!url) return;
+                e.preventDefault();
+                e.stopPropagation();
+                window.location.assign(url);
+            });
+        });
+    }
+})();
+</script>

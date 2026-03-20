@@ -1,0 +1,277 @@
+@page
+@model TinyGenerator.Pages.Agents.SystemPromptsModel
+@{
+    ViewData["Title"] = "System Prompts Agenti";
+    ViewData["PageDescription"] = "Visualizzazione dei system prompt e JSON schema degli agenti";
+}
+
+@section Styles {
+<style>
+    .agent-card .card-header {
+        background-color: #f8f9fa;
+    }
+    .agent-card pre {
+        font-size: 0.82rem;
+        max-height: 280px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #f4f6f8;
+        border-radius: 4px;
+        padding: 0.6rem 0.8rem;
+        margin: 0;
+    }
+    #schemaPopup {
+        position: fixed;
+        top: 100px;
+        left: 100px;
+        width: 640px;
+        height: 480px;
+        min-width: 320px;
+        min-height: 200px;
+        z-index: 1055;
+        resize: both;
+        overflow: hidden;
+        display: none;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+    }
+    #schemaPopup .popup-header {
+        cursor: move;
+        user-select: none;
+        padding: 0.6rem 1rem;
+        background: #343a40;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-radius: 4px 4px 0 0;
+    }
+    #schemaPopup .popup-body {
+        overflow: auto;
+        height: calc(100% - 46px);
+        padding: 0.75rem 1rem;
+        background: #fff;
+    }
+    #schemaPopup pre {
+        font-size: 0.8rem;
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0;
+    }
+    .filter-bar {
+        max-width: 700px;
+    }
+    .badge-role {
+        font-size: 0.75rem;
+        opacity: 0.85;
+    }
+</style>
+}
+
+@if (TempData["SuccessMessage"] is string successMsg)
+{
+    <div class="alert alert-success alert-dismissible fade show mb-3" role="alert">
+        <i class="bi bi-check-circle me-2"></i>@successMsg
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Chiudi"></button>
+    </div>
+}
+
+<!-- Filtri -->
+<div class="filter-bar d-flex gap-2 mb-4">
+    <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-person"></i></span>
+        <input type="text" id="filterAgent" class="form-control" placeholder="Filtra per nome agente..." autocomplete="off" />
+    </div>
+    <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input type="text" id="filterGeneral" class="form-control" placeholder="Filtro generale (ruolo, prompt, schema)..." autocomplete="off" />
+    </div>
+</div>
+
+<!-- Contatore risultati -->
+<div id="resultCount" class="text-muted mb-3 small"></div>
+
+<!-- Schede agenti -->
+<div id="cardsContainer" class="row row-cols-1 row-cols-xl-2 g-3">
+    @foreach (var agent in Model.Agents)
+    {
+        var agentName = agent.Description ?? string.Empty;
+        var agentRole = agent.Role ?? string.Empty;
+        var systemPrompt = agent.SystemPrompt ?? string.Empty;
+        var jsonSchema = agent.JsonResponseFormat ?? string.Empty;
+        var searchText = $"{agentName} {agentRole} {systemPrompt} {jsonSchema}".ToLowerInvariant();
+        <div class="col agent-card-wrapper"
+             data-agent-name="@agentName.ToLowerInvariant()"
+             data-search-text="@Html.Raw(searchText.Replace("\"", "&quot;"))">
+            <div class="card h-100 agent-card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <div class="d-flex align-items-center gap-2 overflow-hidden">
+                        <span class="fw-semibold text-truncate" title="@agentName">@agentName</span>
+                        @if (!string.IsNullOrWhiteSpace(agentRole))
+                        {
+                            <span class="badge bg-secondary badge-role">@agentRole</span>
+                        }
+                        @if (!agent.IsActive)
+                        {
+                            <span class="badge bg-warning text-dark badge-role">inattivo</span>
+                        }
+                    </div>
+                    <a class="btn btn-sm btn-outline-primary ms-2 flex-shrink-0"
+                       asp-page="/Agents/Edit" asp-route-id="@agent.Id"
+                       title="Modifica agente @agentName">
+                        <i class="bi bi-pencil-square me-1"></i>Modifica
+                    </a>
+                </div>
+                <div class="card-body">
+                    <!-- System Prompt -->
+                    <div class="mb-3">
+                        <div class="d-flex align-items-center mb-1">
+                            <i class="bi bi-chat-square-text text-muted me-1"></i>
+                            <span class="small fw-semibold text-muted text-uppercase" style="letter-spacing:.04em;">System Prompt</span>
+                        </div>
+                        @if (string.IsNullOrWhiteSpace(systemPrompt))
+                        {
+                            <span class="text-muted fst-italic small">(nessun system prompt)</span>
+                        }
+                        else
+                        {
+                            <pre>@systemPrompt</pre>
+                        }
+                    </div>
+
+                    <!-- JSON Response Schema -->
+                    <div>
+                        <div class="d-flex align-items-center mb-1">
+                            <i class="bi bi-file-code text-muted me-1"></i>
+                            <span class="small fw-semibold text-muted text-uppercase" style="letter-spacing:.04em;">JSON Response Schema</span>
+                        </div>
+                        @if (string.IsNullOrWhiteSpace(jsonSchema))
+                        {
+                            <span class="text-muted fst-italic small">(nessuno schema definito)</span>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary open-schema-btn"
+                                    data-schema-file="@jsonSchema"
+                                    title="Clicca per visualizzare il contenuto dello schema">
+                                <i class="bi bi-braces me-1"></i>@jsonSchema
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@if (!Model.Agents.Any())
+{
+    <div class="alert alert-info">Nessun agente trovato nel database.</div>
+}
+
+<!-- Popup schema JSON (spostabile e ridimensionabile) -->
+<div id="schemaPopup" class="rounded border" data-schema-endpoint="@Url.Page("/Agents/SystemPrompts", "JsonSchema")">
+    <div class="popup-header" id="schemaPopupHeader">
+        <span><i class="bi bi-braces me-2"></i><span id="schemaPopupTitle"></span></span>
+        <button type="button" class="btn-close btn-close-white btn-sm" id="schemaPopupClose" title="Chiudi"></button>
+    </div>
+    <div class="popup-body">
+        <pre id="schemaPopupContent">Caricamento...</pre>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+(function () {
+    var schemaEndpoint = document.getElementById('schemaPopup').dataset.schemaEndpoint;
+
+    // ----- Filtri -----
+    function applyFilters() {
+        var agentFilter = document.getElementById('filterAgent').value.toLowerCase().trim();
+        var generalFilter = document.getElementById('filterGeneral').value.toLowerCase().trim();
+        var cards = document.querySelectorAll('.agent-card-wrapper');
+        var visible = 0;
+        cards.forEach(function (card) {
+            var agentName = card.dataset.agentName || '';
+            var searchText = card.dataset.searchText || '';
+            var matchAgent = !agentFilter || agentName.includes(agentFilter);
+            var matchGeneral = !generalFilter || searchText.includes(generalFilter);
+            var show = matchAgent && matchGeneral;
+            card.style.display = show ? '' : 'none';
+            if (show) visible++;
+        });
+        document.getElementById('resultCount').textContent =
+            visible + ' di ' + cards.length + ' agenti visualizzati';
+    }
+
+    document.getElementById('filterAgent').addEventListener('input', applyFilters);
+    document.getElementById('filterGeneral').addEventListener('input', applyFilters);
+    applyFilters();
+
+    // ----- Popup schema (event delegation) -----
+    async function openSchemaPopup(filename) {
+        var popup = document.getElementById('schemaPopup');
+        document.getElementById('schemaPopupTitle').textContent = filename;
+        document.getElementById('schemaPopupContent').textContent = 'Caricamento...';
+        popup.style.display = 'block';
+
+        try {
+            var url = schemaEndpoint + '&filename=' + encodeURIComponent(filename);
+            var resp = await fetch(url);
+            if (resp.ok) {
+                var text = await resp.text();
+                try {
+                    document.getElementById('schemaPopupContent').textContent =
+                        JSON.stringify(JSON.parse(text), null, 2);
+                } catch (_) {
+                    document.getElementById('schemaPopupContent').textContent = text;
+                }
+            } else {
+                document.getElementById('schemaPopupContent').textContent =
+                    'Schema non trovato (HTTP ' + resp.status + ').';
+            }
+        } catch (e) {
+            document.getElementById('schemaPopupContent').textContent = 'Errore nel caricamento: ' + e.message;
+        }
+    }
+
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('.open-schema-btn');
+        if (btn) {
+            openSchemaPopup(btn.dataset.schemaFile);
+        }
+    });
+
+    document.getElementById('schemaPopupClose').addEventListener('click', function () {
+        document.getElementById('schemaPopup').style.display = 'none';
+    });
+
+    // ----- Drag del popup -----
+    (function () {
+        var popup = document.getElementById('schemaPopup');
+        var header = document.getElementById('schemaPopupHeader');
+        var dragging = false, startX, startY, origLeft, origTop;
+
+        header.addEventListener('mousedown', function (e) {
+            if (e.target.closest('#schemaPopupClose')) return;
+            dragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            origLeft = popup.offsetLeft;
+            origTop = popup.offsetTop;
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            popup.style.left = Math.max(0, origLeft + e.clientX - startX) + 'px';
+            popup.style.top = Math.max(0, origTop + e.clientY - startY) + 'px';
+        });
+
+        document.addEventListener('mouseup', function () {
+            dragging = false;
+        });
+    })();
+})();
+</script>
+}

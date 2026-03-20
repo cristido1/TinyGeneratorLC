@@ -1,0 +1,92 @@
+@page
+@model TinyGenerator.Pages.Agents.EditModel
+@{
+    ViewData["Title"] = $"Modifica Agente — {Model.Item.Description}";
+    ViewData["PageDescription"] = "Modifica system prompt e configurazione agente";
+}
+
+<div class="container-fluid mt-2">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="mb-0">Modifica Agente</h5>
+        <a class="btn btn-outline-secondary btn-sm" asp-page="/Agents/SystemPrompts">
+            <i class="bi bi-arrow-left me-1"></i>Torna ai System Prompts
+        </a>
+    </div>
+
+    <div class="card">
+        <div class="card-header d-flex align-items-center justify-content-between">
+            <span class="fw-semibold">@Model.Item.Description</span>
+            <span class="text-muted small">ID: @Model.Item.Id</span>
+        </div>
+        <div class="card-body">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <div asp-validation-summary="ModelOnly" class="alert alert-danger"></div>
+                <input type="hidden" asp-for="Item.Id" />
+
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <label asp-for="Item.Description" class="form-label fw-semibold">Nome agente</label>
+                        <input asp-for="Item.Description" class="form-control" />
+                        <span asp-validation-for="Item.Description" class="text-danger small"></span>
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label asp-for="Item.Role" class="form-label fw-semibold">Ruolo</label>
+                        <input asp-for="Item.Role" class="form-control" />
+                        <span asp-validation-for="Item.Role" class="text-danger small"></span>
+                        <div class="form-text">Es: coordinator, writer, story_evaluator, musician, sfx, tts, ambient, mixer</div>
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.SystemPrompt" class="form-label fw-semibold">System Prompt</label>
+                        <textarea asp-for="Item.SystemPrompt" class="form-control font-monospace" rows="14"
+                                  placeholder="Inserisci il system prompt per questo agente..."></textarea>
+                        <span asp-validation-for="Item.SystemPrompt" class="text-danger small"></span>
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.UserPrompt" class="form-label fw-semibold">User Prompt</label>
+                        <textarea asp-for="Item.UserPrompt" class="form-control font-monospace" rows="6"
+                                  placeholder="Inserisci il user prompt per questo agente..."></textarea>
+                        <span asp-validation-for="Item.UserPrompt" class="text-danger small"></span>
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label asp-for="Item.JsonResponseFormat" class="form-label fw-semibold">JSON Response Schema</label>
+                        <input asp-for="Item.JsonResponseFormat" class="form-control"
+                               placeholder="Es: full_evaluation.json" />
+                        <span asp-validation-for="Item.JsonResponseFormat" class="text-danger small"></span>
+                        <div class="form-text">Nome del file schema JSON in <code>response_formats/</code></div>
+                    </div>
+
+                    <div class="col-12 col-md-6 d-flex align-items-end">
+                        <div class="form-check mb-2">
+                            <input asp-for="Item.IsActive" class="form-check-input" type="checkbox" />
+                            <label asp-for="Item.IsActive" class="form-check-label fw-semibold">Attivo</label>
+                        </div>
+                    </div>
+
+                    <div class="col-12">
+                        <label asp-for="Item.Notes" class="form-label fw-semibold">Note</label>
+                        <textarea asp-for="Item.Notes" class="form-control" rows="3"
+                                  placeholder="Note opzionali sull'agente..."></textarea>
+                    </div>
+                </div>
+
+                <div class="mt-4 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-save me-1"></i>Salva modifiche
+                    </button>
+                    <a asp-page="/Agents/SystemPrompts" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-circle me-1"></i>Annulla
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

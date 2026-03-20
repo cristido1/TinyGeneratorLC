@@ -69,11 +69,11 @@ public sealed class ValidateAgentJsonInstructionExamplesCommand : ICommand
                 continue;
             }
 
-            var examples = ExtractJsonExamples(agent.Instructions, _maxExamplesPerAgent);
+            var examples = ExtractJsonExamples(agent.SystemPrompt, _maxExamplesPerAgent);
             if (examples.Count == 0)
             {
                 missingExamplesAgents++;
-                details.Add($"- [{agent.Id}] {Safe(agent.Description)}: nessun esempio JSON rilevato nelle instructions.");
+                details.Add($"- [{agent.Id}] {Safe(agent.Description)}: nessun esempio JSON rilevato nel system_prompt.");
                 continue;
             }
 
@@ -106,8 +106,8 @@ public sealed class ValidateAgentJsonInstructionExamplesCommand : ICommand
         var success = invalidExamples == 0 && missingExamplesAgents == 0 && missingSchemasAgents == 0;
 
         var title = success
-            ? "Verifica examples JSON instructions agenti: OK"
-            : "Verifica examples JSON instructions agenti: criticita trovate";
+            ? "Verifica examples JSON system_prompt agenti: OK"
+            : "Verifica examples JSON system_prompt agenti: criticita trovate";
 
         var summary =
             $"agenti_ispezionati={inspectedAgents}; esempi_valutati={totalExamples}; esempi_invalidi={invalidExamples}; " +

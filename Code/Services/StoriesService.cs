@@ -1279,7 +1279,7 @@ public sealed partial class StoriesService
                         (agent.Role?.Equals("story_evaluator", StringComparison.OrdinalIgnoreCase) ?? false);
                     var baseSystemMessage = (isStoryEvaluatorTextProtocol
                         ? StoriesServiceDefaults.EvaluatorTextProtocolInstructions
-                        : (!string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions : ComposeSystemMessage(agent)))
+                        : (!string.IsNullOrWhiteSpace(agent.SystemPrompt) ? agent.SystemPrompt : ComposeSystemMessage(agent)))
                         ?? string.Empty;
                     var systemMessage = !string.IsNullOrWhiteSpace(instructionsOverride)
                         ? instructionsOverride!
@@ -1296,8 +1296,8 @@ public sealed partial class StoriesService
                         Skills = agent.Skills,
                         Config = agent.Config,
                         JsonResponseFormat = agent.JsonResponseFormat,
-                        Prompt = agent.Prompt,
-                        Instructions = agent.Instructions,
+                        UserPrompt = agent.UserPrompt,
+                        SystemPrompt = agent.SystemPrompt,
                         ExecutionPlan = agent.ExecutionPlan,
                         IsActive = agent.IsActive,
                         CreatedAt = agent.CreatedAt,
@@ -1510,7 +1510,7 @@ public sealed partial class StoriesService
             var primaryResult = await ExecuteEvaluationWithModelAsync(
                 modelName,
                 agent.ModelId.Value,
-                agent.Instructions,
+                agent.SystemPrompt,
                 agent.TopP,
                 agent.TopK,
                 agent.Thinking);
@@ -1553,7 +1553,7 @@ public sealed partial class StoriesService
                     return await ExecuteEvaluationWithModelAsync(
                         fallbackModelName,
                         modelRole.ModelId,
-                        string.IsNullOrWhiteSpace(modelRole.Instructions) ? agent.Instructions : modelRole.Instructions,
+                        string.IsNullOrWhiteSpace(modelRole.Instructions) ? agent.SystemPrompt : modelRole.Instructions,
                         modelRole.TopP ?? agent.TopP,
                         modelRole.TopK ?? agent.TopK,
                         modelRole.Thinking ?? agent.Thinking);
@@ -1608,7 +1608,9 @@ public sealed partial class StoriesService
         if (callCenter == null) return (false, 0, "ICallCenter non disponibile");
 
         var contextLimitTokens = ResolveEvaluatorContextLimitTokens(modelId);
-        const int expectedOutputTokens = 96;
+        // 4 sezioni + spiegazioni brevi richiedono un margine più ampio di 96 token.
+        // Un budget troppo basso porta a output troncati e sezioni finali mancanti.
+        const int expectedOutputTokens = 256;
         const int maxContextReductionRetries = 3;
         var contextReductionRetry = 0;
         var hadContextLimitFailure = false;
@@ -1664,8 +1666,7 @@ public sealed partial class StoriesService
                     MaxRetries = 0,
                     UseResponseChecker = false,
                     AllowFallback = true,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = systemMessage
+                    AskFailExplanation = true
                 }).ConfigureAwait(false);
 
             if (!evalResult.Success)
@@ -2045,8 +2046,7 @@ public sealed partial class StoriesService
                     MaxRetries = 0,
                     UseResponseChecker = false,
                     AllowFallback = true,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = systemMessage
+                    AskFailExplanation = true
                 }).ConfigureAwait(false);
 
             if (!evalResult.Success)
@@ -2606,8 +2606,8 @@ $@"<!doctype html>
 
         try
         {
-            var systemMessage = !string.IsNullOrWhiteSpace(agent.Instructions)
-                ? agent.Instructions
+            var systemMessage = !string.IsNullOrWhiteSpace(agent.SystemPrompt)
+                ? agent.SystemPrompt
                 : (ComposeSystemMessage(agent) ?? string.Empty);
 
             var prompt = BuildActionPacingPrompt(story);
@@ -3335,7 +3335,7 @@ $@"<!doctype html>
                             return new CommandResult(false, "Kernel factory non disponibile");
                         }
 
-                        var systemPrompt = (revisionAgent.Prompt ?? string.Empty).Trim();
+                        var systemPrompt = (revisionAgent.UserPrompt ?? string.Empty).Trim();
                         if (string.IsNullOrWhiteSpace(systemPrompt))
                         {
                             _database.UpdateStoryRevised(storyId, StripMarkdown(raw));
@@ -3366,7 +3366,7 @@ $@"<!doctype html>
 
                         if (criticExtractor != null && criticExtractor.ModelId.HasValue && evaluationsForCritic.Count > 0)
                         {
-                            var criticPrompt = (criticExtractor.Prompt ?? string.Empty).Trim();
+                            var criticPrompt = (criticExtractor.UserPrompt ?? string.Empty).Trim();
                             if (!string.IsNullOrWhiteSpace(criticPrompt))
                             {
                                 try
@@ -3390,7 +3390,6 @@ $@"<!doctype html>
                                             UseResponseChecker = false,
                                             AllowFallback = true,
                                             AskFailExplanation = true,
-                                            SystemPromptOverride = criticPrompt,
                                             DeterministicChecks =
                                             {
                                                 new CheckEmpty
@@ -3509,7 +3508,6 @@ $@"<!doctype html>
                                     UseResponseChecker = false,
                                     AllowFallback = true,
                                     AskFailExplanation = true,
-                                    SystemPromptOverride = systemPromptWithChunk,
                                     DeterministicChecks =
                                     {
                                         new CheckEmpty
@@ -4292,7 +4290,6 @@ $@"<!doctype html>
                         UseResponseChecker = false,
                         AllowFallback = false,
                         AskFailExplanation = true,
-                        SystemPromptOverride = systemPrompt,
                         DeterministicChecks =
                         {
                             new CheckExtractableJsonArray
@@ -4363,19 +4360,69 @@ $@"<!doctype html>
     private static string? ExtractJsonArray(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
-        var start = text.IndexOf('[');
-        var end = text.LastIndexOf(']');
-        if (start < 0 || end <= start) return null;
-        var candidate = text.Substring(start, end - start + 1).Trim();
-        try
+        var source = text.Trim();
+        source = Regex.Replace(source, "(?is)```(?:json)?\\s*(.*?)\\s*```", "$1").Trim();
+
+        static string? TryParseArrayFromJson(string candidate)
         {
-            using var _ = JsonDocument.Parse(candidate);
-            return candidate;
-        }
-        catch
-        {
+            try
+            {
+                using var doc = JsonDocument.Parse(candidate);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    return doc.RootElement.GetRawText();
+                }
+
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var key in new[] { "personaggi", "characters", "Personaggi", "Characters" })
+                    {
+                        if (doc.RootElement.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        {
+                            return arr.GetRawText();
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // ignore and fallback to substring extraction
+            }
+
             return null;
         }
+
+        var parsedWhole = TryParseArrayFromJson(source);
+        if (!string.IsNullOrWhiteSpace(parsedWhole))
+        {
+            return parsedWhole;
+        }
+
+        var arrayStart = source.IndexOf('[');
+        var arrayEnd = source.LastIndexOf(']');
+        if (arrayStart >= 0 && arrayEnd > arrayStart)
+        {
+            var arrayCandidate = source.Substring(arrayStart, arrayEnd - arrayStart + 1).Trim();
+            var parsedArray = TryParseArrayFromJson(arrayCandidate);
+            if (!string.IsNullOrWhiteSpace(parsedArray))
+            {
+                return parsedArray;
+            }
+        }
+
+        var objStart = source.IndexOf('{');
+        var objEnd = source.LastIndexOf('}');
+        if (objStart >= 0 && objEnd > objStart)
+        {
+            var objCandidate = source.Substring(objStart, objEnd - objStart + 1).Trim();
+            var parsedObject = TryParseArrayFromJson(objCandidate);
+            if (!string.IsNullOrWhiteSpace(parsedObject))
+            {
+                return parsedObject;
+            }
+        }
+
+        return null;
     }
 
     private static void EnsureNarratorCharacter(List<StoryCharacter> characters)
@@ -5764,8 +5811,8 @@ $@"<!doctype html>
     private string? ComposeSystemMessage(Agent agent)
     {
         var parts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(agent.Prompt))
-            parts.Add(agent.Prompt);
+        if (!string.IsNullOrWhiteSpace(agent.UserPrompt))
+            parts.Add(agent.UserPrompt);
 
         if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan))
         {
@@ -5774,8 +5821,8 @@ $@"<!doctype html>
                 parts.Add(plan);
         }
 
-        if (!string.IsNullOrWhiteSpace(agent.Instructions))
-            parts.Add(agent.Instructions);
+        if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
+            parts.Add(agent.SystemPrompt);
 
         if (parts.Count == 0)
         {
@@ -13348,6 +13395,81 @@ private static string? SelectMusicFileDeterministic(
         }
     }
 
+    public int GetCommandDispatcherMaxParallelCommands()
+    {
+        try
+        {
+            if (_commandDispatcher is CommandDispatcher concreteDispatcher)
+            {
+                return concreteDispatcher.GetConfiguredQueueParallelism();
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        try
+        {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (File.Exists(appSettingsPath))
+            {
+                var json = File.ReadAllText(appSettingsPath);
+                var root = JsonNode.Parse(json) as JsonObject;
+                var configured = root?["CommandDispatcher"]?["MaxParallelCommands"]?.GetValue<int?>();
+                if (configured.HasValue && configured.Value > 0)
+                {
+                    return Math.Clamp(configured.Value, 1, 64);
+                }
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
+
+        return 1;
+    }
+
+    public bool SetCommandDispatcherMaxParallelCommands(int maxParallelCommands, out int appliedValue)
+    {
+        appliedValue = Math.Clamp(maxParallelCommands, 1, 64);
+
+        try
+        {
+            var appSettingsPath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            if (!File.Exists(appSettingsPath))
+            {
+                return false;
+            }
+
+            var json = File.ReadAllText(appSettingsPath);
+            var root = JsonNode.Parse(json) as JsonObject;
+            if (root == null)
+            {
+                return false;
+            }
+
+            var dispatcherNode = root["CommandDispatcher"] as JsonObject ?? new JsonObject();
+            dispatcherNode["MaxParallelCommands"] = appliedValue;
+            root["CommandDispatcher"] = dispatcherNode;
+
+            var updated = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(appSettingsPath, updated);
+
+            if (_commandDispatcher is CommandDispatcher concreteDispatcher)
+            {
+                appliedValue = concreteDispatcher.SetConfiguredQueueParallelism(appliedValue);
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public void SetMonomodelMode(bool enabled, string? modelDescription)
     {
         try
@@ -13432,6 +13554,11 @@ private static string? SelectMusicFileDeterministic(
             return "vatican_horror";
         }
 
+        if (normalized == "complete_existing_then_vatican")
+        {
+            return "complete_existing_then_vatican";
+        }
+
         return "series";
     }
 
@@ -13487,9 +13614,6 @@ Regole:
 - Copri tutto il chunk, pi� blocchi uno dopo l'altro finch� il chunk e esaurito.";
     }
 }
-
-
-
 
 
 

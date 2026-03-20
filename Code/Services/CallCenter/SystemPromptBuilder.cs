@@ -18,10 +18,10 @@ public sealed class DefaultSystemPromptBuilder : ISystemPromptBuilder
 
     public string Build(Agent agent, string? roleCode)
     {
-        var basePrompt = !string.IsNullOrWhiteSpace(agent.Instructions)
-            ? agent.Instructions.Trim()
-            : !string.IsNullOrWhiteSpace(agent.Prompt)
-                ? agent.Prompt.Trim()
+        var basePrompt = !string.IsNullOrWhiteSpace(agent.SystemPrompt)
+            ? agent.SystemPrompt.Trim()
+            : !string.IsNullOrWhiteSpace(agent.UserPrompt)
+                ? agent.UserPrompt.Trim()
                 : "Rispondi in modo utile e coerente con la richiesta.";
 
         var modelName = ResolveModelName(agent);

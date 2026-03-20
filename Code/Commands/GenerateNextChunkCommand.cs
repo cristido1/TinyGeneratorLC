@@ -241,7 +241,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         var storyHistory = BuildStoryHistorySnapshot();
         var agentIdentity = BuildAgentIdentity(writerAgent);
         var maxAttempts = Math.Max(1, _tuning.GenerateNextChunk.MaxAttempts);
-        var systemPrompt = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.";
+        var systemPrompt = writerAgent.SystemPrompt ?? writerAgent.UserPrompt ?? "Sei uno scrittore esperto.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
         history.AddUser(prompt);
@@ -261,8 +261,7 @@ public sealed class GenerateNextChunkCommand : ICommand
                 MaxRetries = 0,
                 UseResponseChecker = true,
                 AllowFallback = true,
-                AskFailExplanation = true,
-                SystemPromptOverride = systemPrompt
+                AskFailExplanation = true
             };
             options.DeterministicChecks.Add(new CheckEmpty
             {
@@ -370,7 +369,7 @@ public sealed class GenerateNextChunkCommand : ICommand
         }
 
         var prompt = BuildStoryEditorNonCreativePrompt(writerOutput, snap, phase, pov);
-        var systemPrompt = editor.Instructions ?? editor.Prompt ?? "Sei uno story editor non creativo.";
+        var systemPrompt = editor.SystemPrompt ?? editor.UserPrompt ?? "Sei uno story editor non creativo.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
         history.AddUser(prompt);
@@ -382,8 +381,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             MaxRetries = 1,
             UseResponseChecker = true,
             AllowFallback = true,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {
@@ -473,7 +471,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             episodeId,
             chapterId,
             sceneId);
-        var systemPrompt = extractor.Instructions ?? extractor.Prompt ?? "Aggiorna stato narrativo strutturato.";
+        var systemPrompt = extractor.SystemPrompt ?? extractor.UserPrompt ?? "Aggiorna stato narrativo strutturato.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
         history.AddUser(prompt);
@@ -485,8 +483,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             MaxRetries = 1,
             UseResponseChecker = true,
             AllowFallback = true,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {
@@ -1100,7 +1097,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             return new ResourceManagerUpdateResult(false, null, "Agente resource_manager non configurato o non attivo");
         }
 
-        var systemPrompt = resourceManager.Instructions ?? resourceManager.Prompt ?? "Aggiorna il canon state delle risorse e rispondi SOLO in JSON valido.";
+        var systemPrompt = resourceManager.SystemPrompt ?? resourceManager.UserPrompt ?? "Aggiorna il canon state delle risorse e rispondi SOLO in JSON valido.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
         history.AddUser(BuildResourceManagerUpdatePrompt(snap, newChunkText));
@@ -1112,8 +1109,7 @@ public sealed class GenerateNextChunkCommand : ICommand
             MaxRetries = 1,
             UseResponseChecker = true,
             AllowFallback = true,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {
@@ -1480,4 +1476,3 @@ public sealed class GenerateNextChunkCommand : ICommand
     }
 
 }
-

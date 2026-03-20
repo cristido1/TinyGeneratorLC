@@ -44,8 +44,7 @@ internal sealed class SeriesAgentCaller
             MaxRetries = Math.Max(0, request.Options.MaxAttempts - 1),
             UseResponseChecker = effectiveUseResponseChecker,
             AllowFallback = true,
-            AskFailExplanation = request.Options.DiagnoseOnFinalFailure,
-            SystemPromptOverride = BuildSystemPrompt(request.Agent)
+            AskFailExplanation = request.Options.DiagnoseOnFinalFailure
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {
@@ -85,9 +84,9 @@ internal sealed class SeriesAgentCaller
 
     private static string BuildSystemPrompt(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.Instructions))
+        if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
         {
-            return agent.Instructions!;
+            return agent.SystemPrompt!;
         }
 
         return "Sei un assistente esperto.";

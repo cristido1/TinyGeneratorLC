@@ -41,6 +41,7 @@
             <th>Fail Reason</th>
             <th>Operazione</th>
             <th>Durata (s)</th>
+            <th>Tokens</th>
             <th>ThreadId</th>
             <th>StoryId</th>
             <th>Agent</th>
@@ -105,6 +106,12 @@
             padding: 0 2px;
             font-weight: 600;
         }
+        .token-badge {
+            min-width: 68px;
+            display: inline-block;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
     </style>
 }
 
@@ -133,6 +140,19 @@
             var selectedThreadId = null;
             var onlyModelCheckbox = $('#onlyModelCheckbox');
             var onlyResultCheckbox = $('#onlyResultCheckbox');
+            var maxTokens = 12000;
+            function renderTokenBadge(v) {
+                var n = Number(v);
+                if (!Number.isFinite(n) || n < 0) return '<span class="text-muted">-</span>';
+                var ratio = Math.min(1, n / maxTokens);
+                var cls =
+                    ratio <= 0.25 ? 'bg-success' :
+                    ratio <= 0.50 ? 'bg-warning text-dark' :
+                    ratio <= 0.75 ? 'text-white' :
+                    'bg-danger';
+                var style = ratio > 0.50 && ratio <= 0.75 ? ' style="background-color:#fd7e14"' : '';
+                return '<span class="badge token-badge ' + cls + '"' + style + '>' + n.toLocaleString() + '</span>';
+            }
             var table = $('#logsTable').DataTable({
                 processing: true,
                 serverSide: true,
@@ -190,6 +210,7 @@
                     { data: 'failReason', name: 'failreason', render: function (v) { return String(v || '-') || '-'; } },
                     { data: 'operation', name: 'operation' },
                     { data: 'duration', name: 'duration' },
+                    { data: 'tokens', name: 'tokens', render: function (v) { return renderTokenBadge(v); } },
                     { data: 'threadId', name: 'threadid' },
                     { data: 'storyId', name: 'storyid' },
                     { data: 'agent', name: 'agent' },
@@ -217,12 +238,13 @@
                     { responsivePriority: 4, targets: 5 }, // Fail Reason
                     { responsivePriority: 5, targets: 6 }, // Operation
                     { responsivePriority: 6, targets: 7 }, // Duration
-                    { responsivePriority: 7, targets: 8 }, // ThreadId
-                    { responsivePriority: 8, targets: 9 }, // StoryId
-                    { responsivePriority: 9, targets: 10 }, // AgentName
-                    { responsivePriority: 10, targets: 11 }, // Model
+                    { responsivePriority: 7, targets: 8 }, // Tokens
+                    { responsivePriority: 8, targets: 9 }, // ThreadId
+                    { responsivePriority: 9, targets: 10 }, // StoryId
+                    { responsivePriority: 10, targets: 11 }, // AgentName
+                    { responsivePriority: 11, targets: 12 }, // Model
                     { responsivePriority: 11, targets: 3 }, // Source
-                    { orderable: false, targets: 12 }      // Actions
+                    { orderable: false, targets: 13 }      // Actions
                 ],
                 dom: "<'row'<'col-sm-6'B><'col-sm-6'f>>" +
                      "rt" +
@@ -266,7 +288,7 @@
                     }
                 ],
                 stateSave: true,
-                stateSaveName: 'DataTables_logs',
+                stateSaveName: 'DataTables_logs_v2_tokens',
                 stateDuration: -1,
                 createdRow: function (row, data) {
                     var source = String((data && data.source) || '');

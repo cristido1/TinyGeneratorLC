@@ -298,7 +298,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                 }
 
                 var history = new ChatHistory();
-                history.AddSystem(plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto.");
+                history.AddSystem(plannerAgent.SystemPrompt ?? plannerAgent.UserPrompt ?? "Sei un planner narrativo esperto.");
                 history.AddUser(prompt);
 
                 var options = new CallOptions
@@ -308,8 +308,7 @@ Genera SOLO il JSON, senza commenti o testo aggiuntivo.";
                     MaxRetries = 1,
                     UseResponseChecker = false,
                     AllowFallback = true,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = plannerAgent.Instructions ?? plannerAgent.Prompt ?? "Sei un planner narrativo esperto."
+                    AskFailExplanation = true
                 };
                 options.DeterministicChecks.Add(new CheckEmpty
                 {
@@ -510,7 +509,7 @@ REGOLE FONDAMENTALI:
                 }
 
                 var history = new ChatHistory();
-                history.AddSystem(writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto.");
+                history.AddSystem(writerAgent.SystemPrompt ?? writerAgent.UserPrompt ?? "Sei uno scrittore esperto.");
                 history.AddUser(prompt);
 
                 var options = new CallOptions
@@ -520,8 +519,7 @@ REGOLE FONDAMENTALI:
                     MaxRetries = 1,
                     UseResponseChecker = false,
                     AllowFallback = true,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = writerAgent.Instructions ?? writerAgent.Prompt ?? "Sei uno scrittore esperto."
+                    AskFailExplanation = true
                 };
                 options.DeterministicChecks.Add(new CheckEmpty
                 {

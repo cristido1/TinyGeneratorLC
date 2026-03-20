@@ -49,14 +49,14 @@ public sealed class AgentResolutionService : IAgentResolutionService
     private static string? BuildSystemPrompt(Models.Agent agent)
     {
         var sb = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(agent.Prompt))
+        if (!string.IsNullOrWhiteSpace(agent.UserPrompt))
         {
-            sb.AppendLine(agent.Prompt);
+            sb.AppendLine(agent.UserPrompt);
         }
 
-        if (!string.IsNullOrWhiteSpace(agent.Instructions))
+        if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
         {
-            sb.AppendLine(agent.Instructions);
+            sb.AppendLine(agent.SystemPrompt);
         }
 
         return sb.Length > 0 ? sb.ToString() : null;

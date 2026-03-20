@@ -51,6 +51,7 @@ namespace TinyGenerator.Services
             }
 
             var history = new ChatHistory();
+            history.AddSystem(checkerSystemMessage ?? string.Empty);
             history.AddUser(checkerUserPrompt ?? string.Empty);
 
             var callOptions = new CallOptions
@@ -60,8 +61,7 @@ namespace TinyGenerator.Services
                 MaxRetries = 0,
                 UseResponseChecker = false,
                 AskFailExplanation = false,
-                AllowFallback = true,
-                SystemPromptOverride = checkerSystemMessage
+                AllowFallback = true
             };
 
             var effectiveThreadId = threadId ?? LogScope.CurrentThreadId ?? Environment.CurrentManagedThreadId;
@@ -259,17 +259,17 @@ namespace TinyGenerator.Services
             // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message,
             // not to a subsequent user prompt.
             var checkerSystemSb = new StringBuilder();
-            // Include agent-level prompt/instructions if present so DB-managed instructions are honored
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            // Include agent-level user/system prompt if present so DB-managed instructions are honored
+            if (!string.IsNullOrWhiteSpace(checkerAgent.UserPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Prompt ===");
-                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine("=== Agent User Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.UserPrompt);
                 checkerSystemSb.AppendLine();
             }
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            if (!string.IsNullOrWhiteSpace(checkerAgent.SystemPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Instructions ===");
-                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine("=== Agent System Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.SystemPrompt);
                 checkerSystemSb.AppendLine();
             }
 
@@ -490,17 +490,17 @@ namespace TinyGenerator.Services
 
             // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message.
             var checkerSystemSb = new StringBuilder();
-            // Include agent-level prompt/instructions if present
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            // Include agent-level user/system prompt if present
+            if (!string.IsNullOrWhiteSpace(checkerAgent.UserPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Prompt ===");
-                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine("=== Agent User Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.UserPrompt);
                 checkerSystemSb.AppendLine();
             }
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            if (!string.IsNullOrWhiteSpace(checkerAgent.SystemPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Instructions ===");
-                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine("=== Agent System Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.SystemPrompt);
                 checkerSystemSb.AppendLine();
             }
 
@@ -778,16 +778,16 @@ namespace TinyGenerator.Services
 
             // IMPORTANT: when invoking response_checker, append response-format instructions to the SYSTEM message.
             var checkerSystemSb = new StringBuilder();
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Prompt))
+            if (!string.IsNullOrWhiteSpace(checkerAgent.UserPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Prompt ===");
-                checkerSystemSb.AppendLine(checkerAgent.Prompt);
+                checkerSystemSb.AppendLine("=== Agent User Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.UserPrompt);
                 checkerSystemSb.AppendLine();
             }
-            if (!string.IsNullOrWhiteSpace(checkerAgent.Instructions))
+            if (!string.IsNullOrWhiteSpace(checkerAgent.SystemPrompt))
             {
-                checkerSystemSb.AppendLine("=== Agent Instructions ===");
-                checkerSystemSb.AppendLine(checkerAgent.Instructions);
+                checkerSystemSb.AppendLine("=== Agent System Prompt ===");
+                checkerSystemSb.AppendLine(checkerAgent.SystemPrompt);
                 checkerSystemSb.AppendLine();
             }
 

@@ -32,6 +32,7 @@ public class IndexModel : PageModel
     public bool MonomodelModeEnabled { get; set; }
     public string MonomodelModelDescription { get; set; } = string.Empty;
     public List<string> AvailableModelDescriptions { get; set; } = new();
+    public int CommandDispatcherMaxParallelCommands { get; set; } = 1;
 
     public class WriterRanking
     {
@@ -177,6 +178,7 @@ public class IndexModel : PageModel
         {
             MonomodelModeEnabled = _stories.IsMonomodelModeEnabled();
             MonomodelModelDescription = _stories.GetMonomodelModeModelDescription();
+            CommandDispatcherMaxParallelCommands = _stories.GetCommandDispatcherMaxParallelCommands();
         });
 
         Guarded("stories_count", () =>
@@ -310,6 +312,28 @@ public class IndexModel : PageModel
 
         return RedirectToPage();
     }
+
+    public IActionResult OnPostSetCommandDispatcherParallelism(int maxParallelCommands)
+    {
+        try
+        {
+            if (_stories.SetCommandDispatcherMaxParallelCommands(maxParallelCommands, out var appliedValue))
+            {
+                TempData["Message"] = $"CommandDispatcher aggiornato: processi agentici = {appliedValue}.";
+            }
+            else
+            {
+                TempData["Error"] = "Impossibile aggiornare il parallelismo del CommandDispatcher.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting CommandDispatcher parallelism");
+            TempData["Error"] = "Errore durante il salvataggio del parallelismo CommandDispatcher.";
+        }
+
+        return RedirectToPage();
+    }
     
     public IActionResult OnPostToggleAutoAdvancement(bool enabled, string? mode)
     {
@@ -325,7 +349,9 @@ public class IndexModel : PageModel
                         ? "vatican_horror"
                     : (string.Equals(mode, "complete_existing_first", StringComparison.OrdinalIgnoreCase)
                         ? "complete_existing_first"
-                        : "series")));
+                    : (string.Equals(mode, "complete_existing_then_vatican", StringComparison.OrdinalIgnoreCase)
+                        ? "complete_existing_then_vatican"
+                        : "series"))));
             TempData["Message"] = enabled
                 ? selectedMode == "nre"
                     ? "Avanzamento automatico abilitato in modalita NRE casuale: in inattivita verra accodata una nuova storia NRE (15 step)."
@@ -335,6 +361,8 @@ public class IndexModel : PageModel
                             ? "Avanzamento automatico abilitato in modalita horror Vaticano: in inattivita verra accodata una nuova storia horror religiosa in inglese."
                         : selectedMode == "complete_existing_first"
                             ? "Avanzamento automatico abilitato in modalita completamento: il sistema prova prima a completare storie esistenti, poi genera nuove storie se non c'e backlog."
+                        : selectedMode == "complete_existing_then_vatican"
+                            ? "Avanzamento automatico abilitato in modalita completamento+Vaticano: il sistema completa prima le storie esistenti, poi genera solo storie horror Vaticano."
                             : "Avanzamento automatico abilitato in modalita Serie: in inattivita verra avanzata una serie."
                 : "Avanzamento automatico disabilitato.";
         }

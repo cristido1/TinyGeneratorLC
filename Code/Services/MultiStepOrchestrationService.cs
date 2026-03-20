@@ -839,23 +839,23 @@ namespace TinyGenerator.Services
             // Check if stepInstruction contains {{PROMPT}} tag
             string fullPrompt;
             var templateInstructions = GetTemplateInstructions(execution);
-            var agentInstructions = executorAgent.Instructions ?? string.Empty;
-            var agentPrompt = executorAgent.Prompt ?? string.Empty;
+            var agentSystemPrompt = executorAgent.SystemPrompt ?? string.Empty;
+            var agentUserPrompt = executorAgent.UserPrompt ?? string.Empty;
             // Requirement: for writer story generation, always add the agent's Instructions as the FIRST system message.
             // Any other system content (agent prompt, template instructions, story context) should come after.
-            var useAgentInstructionsAsFirstSystemMessage = isStoryTask && !string.IsNullOrWhiteSpace(agentInstructions);
+            var useAgentInstructionsAsFirstSystemMessage = isStoryTask && !string.IsNullOrWhiteSpace(agentSystemPrompt);
 
             string systemMessage;
             string secondarySystemMessage = string.Empty;
 
             if (useAgentInstructionsAsFirstSystemMessage)
             {
-                systemMessage = agentInstructions.Trim();
+                systemMessage = agentSystemPrompt.Trim();
 
                 var secondaryBlocks = new List<string>();
-                if (!string.IsNullOrWhiteSpace(agentPrompt))
+                if (!string.IsNullOrWhiteSpace(agentUserPrompt))
                 {
-                    secondaryBlocks.Add($"=== AGENT PROMPT ===\n{agentPrompt.Trim()}");
+                    secondaryBlocks.Add($"=== AGENT USER PROMPT ===\n{agentUserPrompt.Trim()}");
                 }
                 if (!string.IsNullOrWhiteSpace(templateInstructions))
                 {
@@ -866,13 +866,13 @@ namespace TinyGenerator.Services
             else
             {
                 var systemBlocks = new List<string>();
-                if (!string.IsNullOrWhiteSpace(agentInstructions))
+                if (!string.IsNullOrWhiteSpace(agentSystemPrompt))
                 {
-                    systemBlocks.Add($"=== AGENT INSTRUCTIONS ===\n{agentInstructions.Trim()}");
+                    systemBlocks.Add($"=== AGENT SYSTEM PROMPT ===\n{agentSystemPrompt.Trim()}");
                 }
-                if (!string.IsNullOrWhiteSpace(agentPrompt))
+                if (!string.IsNullOrWhiteSpace(agentUserPrompt))
                 {
-                    systemBlocks.Add($"=== AGENT PROMPT ===\n{agentPrompt.Trim()}");
+                    systemBlocks.Add($"=== AGENT USER PROMPT ===\n{agentUserPrompt.Trim()}");
                 }
                 if (!string.IsNullOrWhiteSpace(templateInstructions))
                 {
@@ -996,8 +996,8 @@ namespace TinyGenerator.Services
                     TopK = executorAgent.TopK,
                     RepeatLastN = executorAgent.RepeatLastN,
                     NumPredict = executorAgent.NumPredict,
-                    Prompt = executorAgent.Prompt,
-                    Instructions = executorAgent.Instructions,
+                    UserPrompt = executorAgent.UserPrompt,
+                    SystemPrompt = executorAgent.SystemPrompt,
                     Skills = executorAgent.Skills,
                     IsActive = executorAgent.IsActive
                 };
@@ -2240,8 +2240,8 @@ RIASSUNTO:";
                     TopK = topK ?? summarizerAgent.TopK,
                     RepeatLastN = repeatLastN ?? summarizerAgent.RepeatLastN,
                     NumPredict = numPredict ?? summarizerAgent.NumPredict,
-                    Prompt = summarizerAgent.Prompt,
-                    Instructions = summarizerAgent.Instructions,
+                    UserPrompt = summarizerAgent.UserPrompt,
+                    SystemPrompt = summarizerAgent.SystemPrompt,
                     IsActive = summarizerAgent.IsActive
                 };
 
@@ -2272,7 +2272,7 @@ RIASSUNTO:";
             }
 
             var history = new ChatHistory();
-            history.AddSystem(summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.");
+            history.AddSystem(summarizerAgent.SystemPrompt ?? summarizerAgent.UserPrompt ?? "Sei un summarizer esperto.");
             history.AddUser(prompt);
 
             var options = new CallOptions
@@ -2282,8 +2282,7 @@ RIASSUNTO:";
                 MaxRetries = 1,
                 UseResponseChecker = false,
                 AllowFallback = true,
-                AskFailExplanation = true,
-                SystemPromptOverride = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto."
+                AskFailExplanation = true
             };
             options.DeterministicChecks.Add(new CheckEmpty
             {
@@ -2360,13 +2359,13 @@ RIASSUNTO:";
                     TopK = currentAgent.TopK,
                     RepeatLastN = currentAgent.RepeatLastN,
                     NumPredict = currentAgent.NumPredict,
-                    Prompt = currentAgent.Prompt,
-                    Instructions = currentAgent.Instructions,
+                    UserPrompt = currentAgent.UserPrompt,
+                    SystemPrompt = currentAgent.SystemPrompt,
                     IsActive = currentAgent.IsActive
                 };
 
                 var history = new ChatHistory();
-                history.AddSystem(currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto.");
+                history.AddSystem(currentAgent.SystemPrompt ?? currentAgent.UserPrompt ?? "Sei un assistente esperto.");
                 history.AddUser(fullPrompt);
 
                 var options = new CallOptions
@@ -2376,8 +2375,7 @@ RIASSUNTO:";
                     MaxRetries = 0,
                     UseResponseChecker = false,
                     AllowFallback = false,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = currentAgent.Instructions ?? currentAgent.Prompt ?? "Sei un assistente esperto."
+                    AskFailExplanation = true
                 };
                 options.DeterministicChecks.Add(new CheckEmpty
                 {
@@ -3129,7 +3127,7 @@ RIASSUNTO:";
             }
 
             // Build system message for evaluation
-            var systemMessage = evaluator.Instructions ?? 
+            var systemMessage = evaluator.SystemPrompt ?? 
                 "Sei un critico letterario esperto. Valuta il capitolo fornito usando la funzione evaluate_chapter. " +
                 "Fornisci punteggi da 1 a 10 per ogni criterio e feedback specifici. " +
                 "Devi SEMPRE chiamare la funzione evaluate_chapter per restituire i tuoi risultati.";

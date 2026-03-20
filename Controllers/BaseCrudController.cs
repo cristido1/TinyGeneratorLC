@@ -13,6 +13,7 @@ using System.Text;
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -36,6 +37,7 @@ public class BaseCrudController : ControllerBase
     private readonly JsonScoreTestService _jsonScoreTester;
     private readonly InstructionScoreTestService _instructionScoreTester;
     private readonly IntelligenceScoreTestService _intelligenceTestService;
+    private readonly IConfiguration _configuration;
 
     public BaseCrudController(
         TinyGeneratorDbContext db,
@@ -45,7 +47,8 @@ public class BaseCrudController : ControllerBase
         IOllamaManagementService ollamaService,
         JsonScoreTestService jsonScoreTester,
         InstructionScoreTestService instructionScoreTester,
-        IntelligenceScoreTestService intelligenceTestService)
+        IntelligenceScoreTestService intelligenceTestService,
+        IConfiguration configuration)
     {
         _db = db;
         _environment = environment;
@@ -55,6 +58,7 @@ public class BaseCrudController : ControllerBase
         _jsonScoreTester = jsonScoreTester;
         _instructionScoreTester = instructionScoreTester;
         _intelligenceTestService = intelligenceTestService;
+        _configuration = configuration;
     }
 
     [HttpGet("tables")]
@@ -430,8 +434,22 @@ ORDER BY name;";
             }
         }
 
-        foreach (var filter in request.Filters ?? Enumerable.Empty<CrudFilter>())
+        var filters = (request.Filters ?? Enumerable.Empty<CrudFilter>()).ToList();
+        var deferredFilters = new List<CrudFilter>();
+        foreach (var filter in filters)
         {
+            if (FindProperty(entityType.ClrType, filter.Field) == null)
+            {
+                var isFkDescriptionField = foreignKeys.Any(fk =>
+                    !string.IsNullOrWhiteSpace(fk.DescriptionField) &&
+                    string.Equals(fk.DescriptionField, filter.Field, StringComparison.OrdinalIgnoreCase));
+                if (isFkDescriptionField)
+                {
+                    deferredFilters.Add(filter);
+                    continue;
+                }
+            }
+
             if (!TryApplyFilter(query, entityType.ClrType, filter, out var filtered, out error))
             {
                 return BadRequest(new { success = false, error });
@@ -439,14 +457,9 @@ ORDER BY name;";
             query = filtered;
         }
 
-        if (!string.IsNullOrWhiteSpace(request.GlobalSearch))
-        {
-            if (!TryApplyGlobalSearch(query, entityType.ClrType, request.GlobalSearch!, out var searched, out error))
-            {
-                return BadRequest(new { success = false, error });
-            }
-            query = searched;
-        }
+        var globalSearch = request.GlobalSearch?.Trim() ?? string.Empty;
+        var hasGlobalSearch = !string.IsNullOrWhiteSpace(globalSearch);
+        var requiresInMemorySearchOrFilter = hasGlobalSearch || deferredFilters.Count > 0;
 
         var sorts = (request.Sorts ?? new List<CrudSort>()).Where(s => !string.IsNullOrWhiteSpace(s.Field)).ToList();
         MaybeInjectOrderableSortForLookup(entityType, request, sorts);
@@ -501,6 +514,14 @@ ORDER BY name;";
             EnrichRowsWithSoundPreviewData(entityType.ClrType, allRows);
             EnrichRowsWithVideoPreviewData(entityType.ClrType, allRows);
             EnrichRowsWithUsageStatsData(entityType.ClrType, allRows);
+            if (deferredFilters.Count > 0)
+            {
+                allRows = ApplyDeferredRowFilters(allRows, deferredFilters);
+            }
+            if (hasGlobalSearch)
+            {
+                allRows = ApplyGlobalSearchInMemory(allRows, globalSearch);
+            }
 
             var keyName = groupProp.Name;
             var groups = allRows
@@ -515,6 +536,7 @@ ORDER BY name;";
                 })
                 .ToList();
 
+            totalRows = allRows.Count;
             var totalGroups = groups.Count;
             var pageGroups = groups
                 .Skip((page - 1) * pageSize)
@@ -548,18 +570,49 @@ ORDER BY name;";
             });
         }
 
-        var paged = query
-            .Cast<object>()
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToList()
-            .Select(ToDictionary)
-            .ToList();
-        EnrichRowsWithRelatedData(entityType.ClrType, paged);
-        EnrichRowsWithImagePreviewData(entityType.ClrType, paged);
-        EnrichRowsWithSoundPreviewData(entityType.ClrType, paged);
-        EnrichRowsWithVideoPreviewData(entityType.ClrType, paged);
-        EnrichRowsWithUsageStatsData(entityType.ClrType, paged);
+        List<Dictionary<string, object?>> paged;
+        if (requiresInMemorySearchOrFilter)
+        {
+            var allRows = query.Cast<object>().ToList()
+                .Select(ToDictionary)
+                .ToList();
+            EnrichRowsWithRelatedData(entityType.ClrType, allRows);
+            EnrichRowsWithImagePreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithSoundPreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithVideoPreviewData(entityType.ClrType, allRows);
+            EnrichRowsWithUsageStatsData(entityType.ClrType, allRows);
+
+            if (deferredFilters.Count > 0)
+            {
+                allRows = ApplyDeferredRowFilters(allRows, deferredFilters);
+            }
+
+            if (hasGlobalSearch)
+            {
+                allRows = ApplyGlobalSearchInMemory(allRows, globalSearch);
+            }
+
+            totalRows = allRows.Count;
+            paged = allRows
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+        }
+        else
+        {
+            paged = query
+                .Cast<object>()
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList()
+                .Select(ToDictionary)
+                .ToList();
+            EnrichRowsWithRelatedData(entityType.ClrType, paged);
+            EnrichRowsWithImagePreviewData(entityType.ClrType, paged);
+            EnrichRowsWithSoundPreviewData(entityType.ClrType, paged);
+            EnrichRowsWithVideoPreviewData(entityType.ClrType, paged);
+            EnrichRowsWithUsageStatsData(entityType.ClrType, paged);
+        }
 
         return Ok(new
         {
@@ -763,8 +816,31 @@ ORDER BY name;";
             _db.Remove(entity);
         }
         await _db.SaveChangesAsync().ConfigureAwait(false);
+
+        // Keep aggregated errors aligned with report lifecycle:
+        // when reports are deleted, remove orphaned system_reports_errors rows.
+        var tableName = (entityType.GetTableName() ?? string.Empty).Trim().ToLowerInvariant();
+        if (tableName == "system_reports")
+        {
+            await DeleteOrphanSystemReportsErrorsAsync().ConfigureAwait(false);
+        }
+
         _database.InvalidateEntityCache(entityType.GetTableName() ?? entityType.ClrType.Name);
         return Ok(new { success = true });
+    }
+
+    private async Task DeleteOrphanSystemReportsErrorsAsync()
+    {
+        await _db.Database.ExecuteSqlRawAsync(@"
+DELETE FROM system_reports_errors
+WHERE id IN (
+    SELECT e.id
+    FROM system_reports_errors e
+    LEFT JOIN system_reports r
+      ON r.error_id = e.id
+     AND coalesce(r.deleted, 0) = 0
+    WHERE r.id IS NULL
+)").ConfigureAwait(false);
     }
 
     [HttpPost("{table}/commands/{commandCode}")]
@@ -1036,15 +1112,15 @@ ORDER BY name;";
         }
     }
 
-    private static async Task<int> CreateGitHubIssueForSystemReportErrorAsync(SystemReportError row, int linkedReports)
+    private async Task<int> CreateGitHubIssueForSystemReportErrorAsync(SystemReportError row, int linkedReports)
     {
-        var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN")?.Trim();
-        var owner = Environment.GetEnvironmentVariable("GITHUB_OWNER")?.Trim();
-        var repo = Environment.GetEnvironmentVariable("GITHUB_REPO")?.Trim();
+        var token = _configuration["Secrets:GitHub:ApiKey"]?.Trim();
+        var owner = _configuration["Secrets:GitHub:Owner"]?.Trim();
+        var repo = _configuration["Secrets:GitHub:Repo"]?.Trim();
 
         if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo))
         {
-            throw new InvalidOperationException("Configurazione GitHub mancante. Servono GITHUB_TOKEN, GITHUB_OWNER e GITHUB_REPO.");
+            throw new InvalidOperationException("Configurazione GitHub mancante in Secrets:GitHub (ApiKey, Owner, Repo).");
         }
 
         var title = $"[SystemReportError] {row.ErrorType} ({row.Agent ?? "n/a"} / {row.Step ?? "n/a"})";
@@ -2156,6 +2232,11 @@ VALUES
             converted = converted?.ToString() ?? string.Empty;
             targetType = typeof(string);
         }
+        else if (targetType == typeof(string))
+        {
+            converted = converted?.ToString() ?? string.Empty;
+            op = "contains";
+        }
 
         Expression memberForCompare = member;
         if (nullableUnderlying != null)
@@ -2268,6 +2349,90 @@ VALUES
         var lambda = Expression.Lambda(body, param);
         result = ApplyWhere(source, type, lambda);
         return true;
+    }
+
+    private static List<Dictionary<string, object?>> ApplyGlobalSearchInMemory(
+        List<Dictionary<string, object?>> rows,
+        string searchText)
+    {
+        if (rows.Count == 0) return rows;
+        var needle = (searchText ?? string.Empty).Trim();
+        if (needle.Length == 0) return rows;
+
+        return rows
+            .Where(row => row.Values.Any(value =>
+            {
+                if (value == null) return false;
+                var text = value.ToString();
+                return !string.IsNullOrWhiteSpace(text) &&
+                       text.Contains(needle, StringComparison.OrdinalIgnoreCase);
+            }))
+            .ToList();
+    }
+
+    private static List<Dictionary<string, object?>> ApplyDeferredRowFilters(
+        List<Dictionary<string, object?>> rows,
+        IReadOnlyCollection<CrudFilter> filters)
+    {
+        if (rows.Count == 0 || filters.Count == 0) return rows;
+
+        var filtered = rows;
+        foreach (var filter in filters)
+        {
+            var field = (filter.Field ?? string.Empty).Trim();
+            if (field.Length == 0) continue;
+            var value = ReadFilterValueAsString(filter.Value);
+            if (string.IsNullOrWhiteSpace(value)) continue;
+
+            filtered = filtered
+                .Where(row =>
+                {
+                    if (!TryGetRowValueCaseInsensitive(row, field, out var raw)) return false;
+                    if (raw == null) return false;
+                    var text = raw.ToString();
+                    return !string.IsNullOrWhiteSpace(text) &&
+                           text.Contains(value, StringComparison.OrdinalIgnoreCase);
+                })
+                .ToList();
+        }
+
+        return filtered;
+    }
+
+    private static bool TryGetRowValueCaseInsensitive(
+        IReadOnlyDictionary<string, object?> row,
+        string field,
+        out object? value)
+    {
+        if (row.TryGetValue(field, out value))
+        {
+            return true;
+        }
+
+        foreach (var kvp in row)
+        {
+            if (string.Equals(kvp.Key, field, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static string ReadFilterValueAsString(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            JsonValueKind.Number => element.ToString(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => string.Empty,
+            _ => element.ToString()
+        };
     }
 
     private static bool TryApplySort(IQueryable source, Type type, CrudSort sort, bool thenBy, out IQueryable result, out string error)

@@ -73,9 +73,9 @@ EPISODES_STRUCT:
 
     public static string ComposePrompt(Agent agent, string roleCode, IReadOnlyDictionary<string, string> placeholders)
     {
-        var template = string.IsNullOrWhiteSpace(agent.Prompt)
+        var template = string.IsNullOrWhiteSpace(agent.UserPrompt)
             ? GetDefaultTemplate(roleCode)
-            : agent.Prompt!;
+            : agent.UserPrompt!;
 
         var replaced = ReplacePlaceholders(template, placeholders);
         if (!string.IsNullOrWhiteSpace(replaced))

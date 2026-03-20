@@ -54,7 +54,7 @@ namespace TinyGenerator.Services
                 return (false, "Impossibile determinare il modello per l'agente log_analyzer");
 
             var systemMessage = BuildSystemMessage(agent);
-            var userPrompt = BuildUserPrompt(scope, logs, agent.Prompt);
+            var userPrompt = BuildUserPrompt(scope, logs, agent.UserPrompt);
 
             // Remove previous analyses before running a new one
             _database.DeleteLogAnalysesByThread(threadId);
@@ -74,8 +74,7 @@ namespace TinyGenerator.Services
                     MaxRetries = 1,
                     UseResponseChecker = false,
                     AskFailExplanation = true,
-                    AllowFallback = true,
-                    SystemPromptOverride = systemMessage
+                    AllowFallback = true
                 };
                 options.DeterministicChecks.Add(new CheckAlwaysSuccess());
 
@@ -154,8 +153,7 @@ namespace TinyGenerator.Services
                     MaxRetries = 1,
                     UseResponseChecker = false,
                     AskFailExplanation = true,
-                    AllowFallback = true,
-                    SystemPromptOverride = systemMessage
+                    AllowFallback = true
                 };
                 options.DeterministicChecks.Add(new CheckAlwaysSuccess());
 
@@ -190,8 +188,8 @@ namespace TinyGenerator.Services
 
         private static string BuildSystemMessage(Agent agent)
         {
-            if (!string.IsNullOrWhiteSpace(agent.Instructions))
-                return agent.Instructions!;
+            if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
+                return agent.SystemPrompt!;
 
             return "Sei un analista senior che esamina log tecnici. Riassumi l'operazione, evidenzia errori o anomalie e suggerisci azioni correttive. Rispondi in testo libero.";
         }

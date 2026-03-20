@@ -130,8 +130,7 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
                 MaxRetries = 1,
                 UseResponseChecker = false,
                 AllowFallback = true,
-                AskFailExplanation = true,
-                SystemPromptOverride = BuildSystemPrompt(writer, _style)
+                AskFailExplanation = true
             };
             options.DeterministicChecks.Add(new CheckEmpty
             {
@@ -240,16 +239,16 @@ public sealed class GenerateRandomSeriesPromptCommand : ICommand
         }
         sb.Append(" Rispondi solo con un prompt finale, senza markdown, senza titoli aggiuntivi.");
 
-        if (!string.IsNullOrWhiteSpace(writer.Prompt))
+        if (!string.IsNullOrWhiteSpace(writer.UserPrompt))
         {
             sb.AppendLine();
-            sb.Append(writer.Prompt.Trim());
+            sb.Append(writer.UserPrompt.Trim());
         }
 
-        if (!string.IsNullOrWhiteSpace(writer.Instructions))
+        if (!string.IsNullOrWhiteSpace(writer.SystemPrompt))
         {
             sb.AppendLine();
-            sb.Append(writer.Instructions.Trim());
+            sb.Append(writer.SystemPrompt.Trim());
         }
 
         return sb.ToString();

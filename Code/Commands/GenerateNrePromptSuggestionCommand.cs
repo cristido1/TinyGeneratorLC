@@ -76,6 +76,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
 
         var userInput = BuildUserInput();
         var history = new ChatHistory();
+        history.AddSystem(BuildSystemPromptOverride());
         history.AddUser(userInput);
 
         var callResult = await _callCenter.CallAgentAsync(
@@ -90,8 +91,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
                 MaxRetries = Math.Max(0, _options.PromptSuggestionMaxRetries),
                 UseResponseChecker = false,
                 AllowFallback = _options.PromptSuggestionAllowFallback,
-                AskFailExplanation = false,
-                SystemPromptOverride = BuildSystemPromptOverride()
+                AskFailExplanation = false
             },
             cancellationToken: ct).ConfigureAwait(false);
 

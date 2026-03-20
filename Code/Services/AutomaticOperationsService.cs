@@ -288,6 +288,25 @@ namespace TinyGenerator.Services
                 return;
             }
 
+            if (mode == "complete_existing_then_vatican")
+            {
+                var (hasCandidates, _) = TryEnqueueCompleteExistingFirstRound(opts);
+                if (hasCandidates)
+                {
+                    return;
+                }
+
+                // No existing evaluated story to advance: fallback to Vatican horror generation.
+                for (var i = 0; i < burst; i++)
+                {
+                    if (!TryRunAutoVaticanHorrorStoryGeneration(opts))
+                    {
+                        break;
+                    }
+                }
+                return;
+            }
+
             for (var i = 0; i < burst; i++)
             {
                 if (!TryRunAutoStateDrivenSeriesEpisode(opts))
@@ -313,35 +332,30 @@ namespace TinyGenerator.Services
                     return (false, 0);
                 }
 
-                var rankedStories = _database.GetStoriesByEvaluation();
-                if (rankedStories == null || rankedStories.Count == 0)
+                var allStories = _database.GetAllStories();
+                if (allStories == null || allStories.Count == 0)
                 {
                     return (false, 0);
                 }
 
-                foreach (var ranked in rankedStories.OrderByDescending(r => r.AvgScore).ThenBy(r => r.Id))
+                var storiesByStatus = allStories
+                    .Where(s => s != null &&
+                                !s.Deleted &&
+                                s.StatusId.HasValue &&
+                                !s.AutoTtsFailed)
+                    .Select(s => new
+                    {
+                        Story = s,
+                        Status = statuses.FirstOrDefault(st => st.Id == s.StatusId!.Value)
+                    })
+                    .Where(x => x.Status != null && x.Status.Step >= evaluatedStep)
+                    .OrderBy(x => x.Status!.Step)
+                    .ThenBy(x => x.Story.Id)
+                    .ToList();
+
+                foreach (var item in storiesByStatus)
                 {
-                    var story = _database.GetStoryById(ranked.Id);
-                    if (story == null || story.Deleted)
-                    {
-                        continue;
-                    }
-
-                    if (!story.StatusId.HasValue)
-                    {
-                        continue;
-                    }
-
-                    if (story.AutoTtsFailed)
-                    {
-                        continue;
-                    }
-
-                    var status = statuses.FirstOrDefault(s => s.Id == story.StatusId.Value);
-                    if (status == null || status.Step < evaluatedStep)
-                    {
-                        continue;
-                    }
+                    var story = item.Story;
 
                     var next = _stories.GetNextStatusForStory(story, statuses);
                     if (next == null)
@@ -2132,6 +2146,11 @@ Return only the story. No comments, no headings, no explanations.";
                 return "vatican_horror";
             }
 
+            if (string.Equals(mode, "complete_existing_then_vatican", StringComparison.OrdinalIgnoreCase))
+            {
+                return "complete_existing_then_vatican";
+            }
+
             return "series";
         }
 
@@ -2267,6 +2286,5 @@ Return only the story. No comments, no headings, no explanations.";
         }
     }
 }
-
 
 

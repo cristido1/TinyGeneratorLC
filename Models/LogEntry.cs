@@ -101,6 +101,9 @@ namespace TinyGenerator.Models
 
         [Column("durationSecs")]
         public int? DurationSecs { get; set; }
+
+        [Column("tokens")]
+        public int? Tokens { get; set; }
         
         // Concurrency token for optimistic locking
         [Timestamp]

@@ -300,8 +300,7 @@ public sealed class CinoOptimizeStoryCommand : ICommand
             MaxRetries = 2,
             UseResponseChecker = _useResponseChecker,
             AllowFallback = true,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {
@@ -528,13 +527,13 @@ public sealed class CinoOptimizeStoryCommand : ICommand
     private static string BuildSystemPrompt(Agent writer)
     {
         var sb = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(writer.Instructions))
+        if (!string.IsNullOrWhiteSpace(writer.SystemPrompt))
         {
-            sb.AppendLine(writer.Instructions.Trim());
+            sb.AppendLine(writer.SystemPrompt.Trim());
         }
-        else if (!string.IsNullOrWhiteSpace(writer.Prompt))
+        else if (!string.IsNullOrWhiteSpace(writer.UserPrompt))
         {
-            sb.AppendLine(writer.Prompt.Trim());
+            sb.AppendLine(writer.UserPrompt.Trim());
         }
 
         sb.AppendLine("Riscrivi l'intera storia migliorandola.");

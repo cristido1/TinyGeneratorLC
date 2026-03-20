@@ -78,11 +78,15 @@ namespace TinyGenerator.Services
 
     public sealed class CommandDispatcher : IHostedService, ICommandDispatcher, IDisposable
     {
+        private const int MaxQueueParallelismLimit = 64;
         private readonly PriorityQueue<CommandWorkItem, CommandWorkItem> _queue = new();
         private readonly object _queueLock = new();
         private readonly SemaphoreSlim _queueSemaphore = new(0);
         private readonly int _parallelism;
         private readonly SemaphoreSlim _queueConfiguredSemaphore;
+        private readonly object _queueParallelismLock = new();
+        private int _queueConfiguredParallelism;
+        private int _queueConfiguredActiveSlots;
         private readonly SemaphoreSlim _monomodelQueueSemaphore = new(4, 4);
         private readonly object _vllmAdmissionLock = new();
         private readonly ICustomLogger? _logger;
@@ -126,8 +130,8 @@ namespace TinyGenerator.Services
             IServiceProvider? services = null)
         {
             _parallelism = Math.Max(1, options?.Value?.MaxParallelCommands ?? 2);
-            // Default mode: force serialized queue execution (1 at a time).
-            _queueConfiguredSemaphore = new SemaphoreSlim(1, 1);
+            _queueConfiguredParallelism = Math.Clamp(_parallelism, 1, MaxQueueParallelismLimit);
+            _queueConfiguredSemaphore = new SemaphoreSlim(_queueConfiguredParallelism, MaxQueueParallelismLimit);
             var maxBatchGlobal = Math.Max(1, options?.Value?.MaxBatchProcessesGlobal ?? 8);
             _maxBatchProcessesPerOperation = Math.Max(1, options?.Value?.MaxBatchProcessesPerOperation ?? 3);
             _batchGlobalSemaphore = new SemaphoreSlim(maxBatchGlobal, maxBatchGlobal);
@@ -137,6 +141,32 @@ namespace TinyGenerator.Services
             _numerator = numerator;
             _services = services ?? throw new ArgumentNullException(nameof(services));
             _policies = policies?.Value ?? new CommandPoliciesOptions();
+        }
+
+        public int GetConfiguredQueueParallelism()
+        {
+            lock (_queueParallelismLock)
+            {
+                return _queueConfiguredParallelism;
+            }
+        }
+
+        public int SetConfiguredQueueParallelism(int requestedParallelism)
+        {
+            var normalized = Math.Clamp(requestedParallelism, 1, MaxQueueParallelismLimit);
+
+            lock (_queueParallelismLock)
+            {
+                _queueConfiguredParallelism = normalized;
+                RebalanceQueueConfiguredSemaphore_NoLock();
+            }
+
+            _logger?.Log(
+                "Information",
+                "Command",
+                $"Queue parallelismo aggiornato a runtime: default={normalized}; monomodel_llama=4; monomodel_vllm=dinamico");
+
+            return normalized;
         }
 
         public CommandHandle Enqueue(
@@ -392,7 +422,53 @@ namespace TinyGenerator.Services
             }
 
             await _queueConfiguredSemaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
-            return new AsyncReleaseHandle(() => _queueConfiguredSemaphore.Release());
+            lock (_queueParallelismLock)
+            {
+                _queueConfiguredActiveSlots++;
+            }
+            return new AsyncReleaseHandle(ReleaseQueueConfiguredSlot);
+        }
+
+        private void ReleaseQueueConfiguredSlot()
+        {
+            lock (_queueParallelismLock)
+            {
+                if (_queueConfiguredActiveSlots > 0)
+                {
+                    _queueConfiguredActiveSlots--;
+                }
+
+                if (_queueConfiguredActiveSlots < _queueConfiguredParallelism)
+                {
+                    _queueConfiguredSemaphore.Release();
+                }
+            }
+        }
+
+        private void RebalanceQueueConfiguredSemaphore_NoLock()
+        {
+            var targetAvailable = Math.Max(0, _queueConfiguredParallelism - _queueConfiguredActiveSlots);
+            var currentAvailable = _queueConfiguredSemaphore.CurrentCount;
+
+            if (currentAvailable < targetAvailable)
+            {
+                var toRelease = targetAvailable - currentAvailable;
+                for (var i = 0; i < toRelease; i++)
+                {
+                    _queueConfiguredSemaphore.Release();
+                }
+                return;
+            }
+
+            if (currentAvailable > targetAvailable)
+            {
+                var toDrain = currentAvailable - targetAvailable;
+                var drained = 0;
+                while (drained < toDrain && _queueConfiguredSemaphore.Wait(0))
+                {
+                    drained++;
+                }
+            }
         }
 
         private async ValueTask<IAsyncDisposable> AcquireVllmQueueExecutionSlotAsync(CancellationToken cancellationToken)
@@ -810,7 +886,7 @@ namespace TinyGenerator.Services
             _logger?.Log(
                 "Information",
                 "Command",
-                $"CommandDispatcher avviato con workers={workerCount}; queue_parallelismo_default=1; queue_parallelismo_monomodel_llama=4; queue_parallelismo_monomodel_vllm=dinamico; queue_parallelismo_configurato={_parallelism}");
+                $"CommandDispatcher avviato con workers={workerCount}; queue_parallelismo_default={GetConfiguredQueueParallelism()}; queue_parallelismo_monomodel_llama=4; queue_parallelismo_monomodel_vllm=dinamico; queue_parallelismo_configurato={_parallelism}");
             return Task.CompletedTask;
         }
 
@@ -895,7 +971,7 @@ namespace TinyGenerator.Services
             var policy = _policies.Resolve(workItem.OperationName, workItem.Metadata);
             var timeoutSec = policy.TimeoutSec;
 
-            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, agentRole: workItem.AgentRole, threadId: allocatedThreadId, storyId: allocatedStoryId);
+            using var scope = LogScope.Push(workItem.ThreadScope, workItem.OperationNumber, null, null, workItem.AgentName, agentRole: workItem.AgentRole, threadId: allocatedThreadId, storyId: allocatedStoryId, runId: workItem.RunId);
             using var commandRuntimeScope = CommandExecutionRuntime.Push(workItem.OperationName, timeoutSec);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, workItem.Cancellation.Token);
             var ctx = new CommandContext(workItem.RunId, workItem.OperationName, workItem.Metadata, workItem.OperationNumber, linkedCts.Token);
@@ -1436,7 +1512,22 @@ Completed:
         {
             if (_active.TryGetValue(runId, out var state))
             {
-                state.RetryCount = retryCount;
+                state.RetryCount = Math.Max(0, retryCount);
+                _ = BroadcastCommandsAsync();
+            }
+        }
+
+        public void UpdateCallCenterRetry(string runId, int retryCount, int maxRetry)
+        {
+            if (string.IsNullOrWhiteSpace(runId))
+            {
+                return;
+            }
+
+            if (_active.TryGetValue(runId, out var state))
+            {
+                state.RetryCount = Math.Max(0, retryCount);
+                state.MaxRetry = Math.Max(0, maxRetry);
                 _ = BroadcastCommandsAsync();
             }
         }

@@ -388,9 +388,9 @@ public sealed class RunNreCommand : ICommand
 
         try
         {
-            var system = !string.IsNullOrWhiteSpace(agent.Instructions)
-                ? agent.Instructions!.Trim()
-                : (!string.IsNullOrWhiteSpace(agent.Prompt) ? agent.Prompt!.Trim() : "Analizza il failure context e fornisci motivo tecnico e azione suggerita.");
+            var system = !string.IsNullOrWhiteSpace(agent.SystemPrompt)
+                ? agent.SystemPrompt!.Trim()
+                : (!string.IsNullOrWhiteSpace(agent.UserPrompt) ? agent.UserPrompt!.Trim() : "Analizza il failure context e fornisci motivo tecnico e azione suggerita.");
 
             var history = new ChatHistory();
             history.AddSystem(system);
@@ -403,8 +403,7 @@ public sealed class RunNreCommand : ICommand
                 MaxRetries = 1,
                 UseResponseChecker = false,
                 AllowFallback = true,
-                AskFailExplanation = false,
-                SystemPromptOverride = system
+                AskFailExplanation = false
             };
             options.DeterministicChecks.Add(new CheckAlwaysSuccess());
 

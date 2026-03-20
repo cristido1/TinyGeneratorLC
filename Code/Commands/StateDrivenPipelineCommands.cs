@@ -1005,8 +1005,8 @@ internal static class StateDrivenPipelineHelpers
 
     public static string BuildSystemPrompt(Agent agent)
     {
-        if (!string.IsNullOrWhiteSpace(agent.Instructions)) return agent.Instructions!;
-        if (!string.IsNullOrWhiteSpace(agent.Prompt)) return agent.Prompt!;
+        if (!string.IsNullOrWhiteSpace(agent.SystemPrompt)) return agent.SystemPrompt!;
+        if (!string.IsNullOrWhiteSpace(agent.UserPrompt)) return agent.UserPrompt!;
         return "Sei un assistente esperto.";
     }
 
@@ -1065,8 +1065,7 @@ internal static class StateDrivenPipelineHelpers
             MaxRetries = 1,
             UseResponseChecker = !skipResponseChecker,
             AllowFallback = allowInternalFallback,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {

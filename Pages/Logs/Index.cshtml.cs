@@ -84,6 +84,7 @@ namespace TinyGenerator.Pages.Logs
                     failReason = log.ResultFailReason ?? string.Empty,
                     operation = GetOperationDisplay(log),
                     duration = log.DurationSecs.HasValue && log.DurationSecs.Value > 0 ? log.DurationSecs.Value : 1,
+                    tokens = log.Tokens,
                     threadId = log.ThreadId.HasValue && log.ThreadId.Value > 0 ? log.ThreadId.Value.ToString() : "-",
                     storyId = log.StoryId.HasValue && log.StoryId.Value > 0 ? log.StoryId.Value.ToString() : "-",
                     agent = string.IsNullOrWhiteSpace(log.AgentName) ? "-" : log.AgentName,

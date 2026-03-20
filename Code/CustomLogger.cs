@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
@@ -81,7 +82,8 @@ namespace TinyGenerator.Services
             int? explicitThreadId = null,
             string? modelName = null,
             string? agentNameOverride = null,
-            int? durationSecs = null)
+            int? durationSecs = null,
+            int? tokens = null)
         {
             if (_disposed) return;
 
@@ -191,7 +193,8 @@ namespace TinyGenerator.Services
                 Examined = false,
                 StepNumber = LogScope.CurrentStepNumber,
                 MaxStep = LogScope.CurrentMaxStep,
-                DurationSecs = NormalizeDuration(durationSecs)
+                DurationSecs = NormalizeDuration(durationSecs),
+                Tokens = NormalizeTokens(tokens)
             };
 
             if (ShouldSuppressDuplicatePersistedEntry(entry))
@@ -215,6 +218,23 @@ namespace TinyGenerator.Services
         {
             if (!durationSecs.HasValue) return 1;
             return Math.Max(1, durationSecs.Value);
+        }
+
+        private static int? NormalizeTokens(int? tokens)
+        {
+            if (!tokens.HasValue) return null;
+            return Math.Max(0, tokens.Value);
+        }
+
+        private static int EstimateTokenCountHeuristic(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return 0;
+            }
+
+            // Heuristic estimate: mixed natural language/JSON payloads average around 1 token every 4 chars.
+            return Math.Max(1, (int)Math.Ceiling(text.Length / 4.0));
         }
 
         private bool ShouldSuppressDuplicatePersistedEntry(LogEntry entry)
@@ -405,7 +425,8 @@ namespace TinyGenerator.Services
             
             var message = $"[{modelName}] PROMPT: {displayPrompt}";
             var chatText = displayPrompt;
-            LogWithChatText("Information", "ModelPrompt", message, chatText, modelName: modelName, agentNameOverride: agentName);
+            var estimatedTokens = EstimateTokenCountHeuristic(displayPrompt);
+            LogWithChatText("Information", "ModelPrompt", message, chatText, modelName: modelName, agentNameOverride: agentName, tokens: estimatedTokens);
         }
 
         /// <summary>
@@ -463,7 +484,8 @@ namespace TinyGenerator.Services
                 chatText = requestJson;
             }
             
-            LogWithChatText("Information", "ModelRequest", message, chatText, null, null, null, threadId, modelName, agentName);
+            var estimatedTokens = EstimateTokenCountHeuristic(requestJson);
+            LogWithChatText("Information", "ModelRequest", message, chatText, null, null, null, threadId, modelName, agentName, null, estimatedTokens);
         }
 
         /// <summary>
@@ -477,6 +499,7 @@ namespace TinyGenerator.Services
             var effectiveThreadId = ResolveEffectiveThreadId(threadId);
             var effectiveAgentName = ResolveAgentName(agentName, ResolveOperationScope(LogScope.Current, "ModelResponse", message), "ModelResponse");
             var responseDurationSecs = TryComputeModelResponseDurationSeconds(effectiveThreadId, effectiveAgentName, modelName, responseReceivedAt);
+            var (requestTokens, responseTokens, totalTokens) = TryExtractTokensFromResponseJson(responseJson);
             
             // Extract assistant content or function calls for cleaner chat display
             string chatText;
@@ -496,7 +519,8 @@ namespace TinyGenerator.Services
                     if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase) && messageObj.TryGetProperty("content", out var toolContent))
                     {
                         chatText = toolContent.GetString() ?? responseJson;
-                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs);
+                        LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs, responseTokens ?? totalTokens);
+                        TryBackfillRequestTokens(effectiveThreadId, effectiveAgentName, modelName, requestTokens);
                         return;
                     }
 
@@ -532,7 +556,111 @@ namespace TinyGenerator.Services
                 chatText = responseJson;
             }
 
-            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs);
+            LogWithChatText("Information", "ModelResponse", message, chatText, null, null, "SUCCESS", threadId, modelName, agentName, responseDurationSecs, responseTokens ?? totalTokens);
+            TryBackfillRequestTokens(effectiveThreadId, effectiveAgentName, modelName, requestTokens);
+        }
+
+        private void TryBackfillRequestTokens(int threadId, string? agentName, string? modelName, int? requestTokens)
+        {
+            if (!requestTokens.HasValue || requestTokens.Value < 0) return;
+
+            try
+            {
+                var storyId = LogScope.CurrentStoryId.HasValue
+                    && LogScope.CurrentStoryId.Value > 0
+                    && LogScope.CurrentStoryId.Value <= int.MaxValue
+                    ? (long?)LogScope.CurrentStoryId.Value
+                    : null;
+
+                _db.UpdateLatestModelRequestTokensForAgent(threadId, agentName, modelName, requestTokens.Value, storyId);
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
+
+        private static (int? RequestTokens, int? ResponseTokens, int? TotalTokens) TryExtractTokensFromResponseJson(string? responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+            {
+                return (null, null, null);
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(responseJson);
+                var root = doc.RootElement;
+
+                int? requestTokens = null;
+                int? responseTokens = null;
+                int? totalTokens = null;
+
+                if (TryGetPropertyIgnoreCase(root, "usage", out var usage) &&
+                    usage.ValueKind == JsonValueKind.Object)
+                {
+                    requestTokens = TryGetInt(usage, "prompt_tokens");
+                    responseTokens = TryGetInt(usage, "completion_tokens") ?? TryGetInt(usage, "output_tokens");
+                    totalTokens = TryGetInt(usage, "total_tokens");
+                }
+
+                requestTokens ??= TryGetInt(root, "prompt_eval_count");
+                responseTokens ??= TryGetInt(root, "eval_count") ?? TryGetInt(root, "output_tokens");
+                totalTokens ??= (requestTokens.HasValue || responseTokens.HasValue)
+                    ? (requestTokens ?? 0) + (responseTokens ?? 0)
+                    : null;
+
+                return (requestTokens, responseTokens, totalTokens);
+            }
+            catch
+            {
+                return (null, null, null);
+            }
+        }
+
+        private static bool TryGetPropertyIgnoreCase(JsonElement root, string propertyName, out JsonElement value)
+        {
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty(propertyName, out value))
+                {
+                    return true;
+                }
+
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = property.Value;
+                        return true;
+                    }
+                }
+            }
+
+            value = default;
+            return false;
+        }
+
+        private static int? TryGetInt(JsonElement root, string propertyName)
+        {
+            if (!TryGetPropertyIgnoreCase(root, propertyName, out var value))
+            {
+                return null;
+            }
+
+            try
+            {
+                return value.ValueKind switch
+                {
+                    JsonValueKind.Number => value.TryGetInt32(out var n) ? n : (value.TryGetInt64(out var n64) ? (int?)Math.Clamp(n64, 0, int.MaxValue) : null),
+                    JsonValueKind.String => int.TryParse(value.GetString(), out var s) ? s : null,
+                    _ => null
+                };
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static int ResolveEffectiveThreadId(int? explicitThreadId)

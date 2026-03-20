@@ -172,8 +172,7 @@ namespace TinyGenerator.Services.Commands
                             MaxRetries = Math.Max(0, maxAttempts - 1),
                             UseResponseChecker = false,
                             AllowFallback = _tuning.TransformStoryRawToTagged.EnableFallback,
-                            AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure,
-                            SystemPromptOverride = systemPrompt
+                            AskFailExplanation = _tuning.TransformStoryRawToTagged.DiagnoseOnFinalFailure
                         };
                         foreach (var lineId in quoteLineIds.OrderBy(x => x))
                         {
@@ -420,9 +419,9 @@ namespace TinyGenerator.Services.Commands
         private static string? BuildSystemPrompt(Agent agent)
         {
             var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(agent.Prompt))
+            if (!string.IsNullOrWhiteSpace(agent.UserPrompt))
             {
-                parts.Add(agent.Prompt);
+                parts.Add(agent.UserPrompt);
             }
 
             if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan))
@@ -434,9 +433,9 @@ namespace TinyGenerator.Services.Commands
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(agent.Instructions))
+            if (!string.IsNullOrWhiteSpace(agent.SystemPrompt))
             {
-                parts.Add(agent.Instructions);
+                parts.Add(agent.SystemPrompt);
             }
 
             return parts.Count == 0 ? null : string.Join("\n\n", parts);

@@ -594,16 +594,32 @@ namespace TinyGenerator.Services
                 return;
             }
 
-            if (!bridge.MaxResponseTokens.HasValue || bridge.MaxResponseTokens.Value < floorTokens)
+            // Never force output tokens beyond the known context limit.
+            var boundedFloor = floorTokens;
+            if (bridge.NumCtx.HasValue && bridge.NumCtx.Value > 0)
             {
-                bridge.MaxResponseTokens = floorTokens;
+                boundedFloor = Math.Min(boundedFloor, bridge.NumCtx.Value);
+            }
+
+            if (boundedFloor <= 0)
+            {
+                return;
+            }
+
+            if (!bridge.MaxResponseTokens.HasValue || bridge.MaxResponseTokens.Value <= 0)
+            {
+                bridge.MaxResponseTokens = boundedFloor;
+            }
+            else if (bridge.MaxResponseTokens.Value < boundedFloor)
+            {
+                bridge.MaxResponseTokens = boundedFloor;
             }
 
             // Negative values are sentinel values (-1/-2 = "no hard token cap" for local providers).
             if (!preserveExplicitNumPredict &&
-                (!bridge.NumPredict.HasValue || (bridge.NumPredict.Value >= 0 && bridge.NumPredict.Value < floorTokens)))
+                (!bridge.NumPredict.HasValue || (bridge.NumPredict.Value >= 0 && bridge.NumPredict.Value < boundedFloor)))
             {
-                bridge.NumPredict = floorTokens;
+                bridge.NumPredict = boundedFloor;
             }
         }
     }

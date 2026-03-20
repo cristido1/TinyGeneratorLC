@@ -642,7 +642,7 @@
                             <span class="ms-2"><img src="${modelImagePath}" alt="provider" style="width:14px;height:14px;object-fit:contain;vertical-align:-2px;margin-right:4px;" />${escapeHtml(modelCode)}</span>
                             ${elapsedText ? `<span class="ms-2"><i class="bi bi-clock me-1"></i>${elapsedText}</span>` : ''}
                         </div>
-                        ${isCinoCommand ? retryInfoLine : ''}
+                        ${retryInfoLine}
                         ${cinoInfo}
                         ${stateInfo}
                         ${stateProgressBar}

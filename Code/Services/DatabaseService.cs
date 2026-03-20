@@ -268,8 +268,8 @@ public sealed class DatabaseService
             Skills = source.Skills,
             Config = source.Config,
             JsonResponseFormat = source.JsonResponseFormat,
-            Prompt = source.Prompt,
-            Instructions = source.Instructions,
+            UserPrompt = source.UserPrompt,
+            SystemPrompt = source.SystemPrompt,
             ExecutionPlan = source.ExecutionPlan,
             IsActive = source.IsActive,
             CreatedAt = source.CreatedAt,
@@ -464,7 +464,7 @@ public sealed class DatabaseService
         {
             using var conn = CreateDapperConnection();
             conn.Open();
-            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, description AS Description, role, model_id, voice_rowid, skills, config, json_response_format, prompt, instructions, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
+            var rows = conn.Query<TinyGenerator.Models.Agent>("SELECT id, description AS Description, role, model_id, voice_rowid, skills, config, json_response_format, user_prompt AS UserPrompt, system_prompt AS SystemPrompt, execution_plan, is_active, created_at, updated_at, notes, temperature, top_p, repeat_penalty, top_k, repeat_last_n, num_predict, thinking, multi_step_template_id, sort_order, allowed_profiles FROM agents").ToList();
             return rows.OrderBy(a => a.Description).ToList();
         }
     }
@@ -9060,11 +9060,27 @@ WHERE c.code IN (
             Console.WriteLine($"[DB] Warning: unable to add Examined column to Log: {ex.Message}");
         }
 
+        // Migration: add tokens column to Log if missing
+        try
+        {
+            var hasTokens = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('Log') WHERE name = 'tokens'") > 0;
+            if (!hasTokens)
+            {
+                conn.Execute("ALTER TABLE Log ADD COLUMN tokens INTEGER");
+                Console.WriteLine("[DB] Migration: added tokens column to Log");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DB] Warning: unable to add tokens column to Log: {ex.Message}");
+        }
+
         // Data normalization: keep legacy/null Log values compatible with EF model mapping.
         try
         {
             conn.Execute("UPDATE Log SET Examined = 0 WHERE Examined IS NULL");
             conn.Execute("UPDATE Log SET durationSecs = 1 WHERE durationSecs IS NULL OR durationSecs < 1");
+            conn.Execute("UPDATE Log SET tokens = 0 WHERE tokens IS NOT NULL AND tokens < 0");
         }
         catch (Exception ex)
         {
@@ -9237,8 +9253,8 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 try
                 {
                     conn.Execute(@"
-                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result, ResultFailReason, Examined, durationSecs)
-                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL, NULL, 0, 1
+                        INSERT INTO Log (Ts, Level, Category, Message, Exception, State, ThreadId, AgentName, Context, Result, ResultFailReason, Examined, durationSecs, tokens)
+                        SELECT l.ts, l.level, l.category, l.message, l.exception, l.state, 0, NULL, NULL, NULL, NULL, 0, 1, NULL
                         FROM logs l
                         WHERE NOT EXISTS (
                             SELECT 1 FROM Log existing 
@@ -9410,10 +9426,26 @@ VALUES (@event_type, @description, 1, 1, 1, datetime('now'), datetime('now'))",
                 Console.WriteLine("[DB] Adding thinking column to agents");
                 conn.Execute("ALTER TABLE agents ADD COLUMN thinking INTEGER NULL");
             }
+
+            var hasAgentPrompt = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='prompt'");
+            var hasAgentUserPrompt = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='user_prompt'");
+            if (hasAgentPrompt > 0 && hasAgentUserPrompt == 0)
+            {
+                Console.WriteLine("[DB] Renaming agents.prompt -> user_prompt");
+                conn.Execute("ALTER TABLE agents RENAME COLUMN prompt TO user_prompt");
+            }
+
+            var hasAgentInstructions = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='instructions'");
+            var hasAgentSystemPrompt = conn.ExecuteScalar<long>("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='system_prompt'");
+            if (hasAgentInstructions > 0 && hasAgentSystemPrompt == 0)
+            {
+                Console.WriteLine("[DB] Renaming agents.instructions -> system_prompt");
+                conn.Execute("ALTER TABLE agents RENAME COLUMN instructions TO system_prompt");
+            }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DB] Warning: failed to add temperature/top_p/repeat_penalty/top_k/repeat_last_n/num_predict/thinking to agents: {ex.Message}");
+            Console.WriteLine($"[DB] Warning: failed to migrate agents columns (params/prompt names): {ex.Message}");
         }
 
         // Migration: Add note column to models if not exists
@@ -10196,7 +10228,7 @@ CREATE TABLE global_coherence (
             {
                 Console.WriteLine("[DB] Seeding SentimentMapper agent");
                 conn.Execute(@"
-INSERT INTO agents (description, notes, is_active, role, prompt, instructions, created_at, updated_at)
+INSERT INTO agents (description, notes, is_active, role, user_prompt, system_prompt, created_at, updated_at)
 VALUES (
     'SentimentMapper',
     'Mappa sentimenti liberi ai 7 sentimenti TTS supportati (neutral, happy, sad, angry, fearful, disgusted, surprised)',
@@ -10315,7 +10347,8 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
                       Result = null,
                       ResultFailReason = null,
                       Examined = false,
-                      DurationSecs = 1
+                      DurationSecs = 1,
+                      Tokens = null
                   };
 
                 // Trim very large aggregated messages to avoid DB bloat
@@ -10344,7 +10377,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         await ((SqliteConnection)conn).OpenAsync();
 
         // Build a single INSERT ... VALUES (...),(...),... with uniquely named parameters to avoid collisions
-        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "model_name", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined", "durationSecs" };
+        var cols = new[] { "Ts", "Level", "Category", "Message", "Exception", "State", "ThreadId", "story_id", "ThreadScope", "AgentName", "model_name", "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined", "durationSecs", "tokens" };
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
 
@@ -10374,6 +10407,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
             parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
             parameters.Add("@durationSecs" + i, Math.Max(1, e.DurationSecs ?? 1));
+            parameters.Add("@tokens" + i, e.Tokens.HasValue ? Math.Max(0, e.Tokens.Value) : null);
         }
 
         sb.Append(";");
@@ -10385,16 +10419,35 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         catch (SqliteException ex) when (ex.Message != null && ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
         {
             // Backward-compat: database not migrated yet. Retry with reduced column sets.
-            if (ex.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
+            if (ex.Message.Contains("tokens", StringComparison.OrdinalIgnoreCase))
             {
                 try
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: false, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase));
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: true, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase), includeTokens: false);
                     return;
                 }
                 catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false));
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false), includeTokens: false);
+                    return;
+                }
+                catch (SqliteException ex3) when (ex3.Message != null && ex3.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex3.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false), includeTokens: false);
+                    return;
+                }
+            }
+
+            if (ex.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: false, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase), includeTokens: !ex.Message.Contains("tokens", StringComparison.OrdinalIgnoreCase));
+                    return;
+                }
+                catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false), includeTokens: !(ex2.Message?.Contains("tokens", StringComparison.OrdinalIgnoreCase) ?? false));
                     return;
                 }
             }
@@ -10403,12 +10456,12 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             {
                 try
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase));
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: !ex.Message.Contains("durationSecs", StringComparison.OrdinalIgnoreCase), includeTokens: !ex.Message.Contains("tokens", StringComparison.OrdinalIgnoreCase));
                     return;
                 }
                 catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false));
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: !(ex2.Message?.Contains("durationSecs", StringComparison.OrdinalIgnoreCase) ?? false), includeTokens: !(ex2.Message?.Contains("tokens", StringComparison.OrdinalIgnoreCase) ?? false));
                 }
             }
 
@@ -10416,23 +10469,23 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             {
                 try
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: true, includeDuration: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: true, includeModelName: true, includeDuration: false, includeTokens: !ex.Message.Contains("tokens", StringComparison.OrdinalIgnoreCase));
                     return;
                 }
                 catch (SqliteException ex2) when (ex2.Message != null && ex2.Message.Contains("story_id", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: true, includeDuration: false, includeTokens: !(ex2.Message?.Contains("tokens", StringComparison.OrdinalIgnoreCase) ?? false));
                     return;
                 }
                 catch (SqliteException ex3) when (ex3.Message != null && ex3.Message.Contains("model_name", StringComparison.OrdinalIgnoreCase))
                 {
-                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: false);
+                    await TryInsertLogsAsync(conn, list, includeStoryId: false, includeModelName: false, includeDuration: false, includeTokens: !(ex3.Message?.Contains("tokens", StringComparison.OrdinalIgnoreCase) ?? false));
                 }
             }
         }
     }
 
-    private static async Task TryInsertLogsAsync(IDbConnection conn, List<TinyGenerator.Models.LogEntry> list, bool includeStoryId, bool includeModelName, bool includeDuration)
+    private static async Task TryInsertLogsAsync(IDbConnection conn, List<TinyGenerator.Models.LogEntry> list, bool includeStoryId, bool includeModelName, bool includeDuration, bool includeTokens)
     {
         var cols = new List<string>
         {
@@ -10443,6 +10496,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         if (includeModelName) cols.Add("model_name");
         cols.AddRange(new[] { "Context", "analized", "chat_text", "Result", "ResultFailReason", "Examined" });
         if (includeDuration) cols.Add("durationSecs");
+        if (includeTokens) cols.Add("tokens");
 
         var sb = new System.Text.StringBuilder();
         sb.Append("INSERT INTO Log (" + string.Join(", ", cols) + ") VALUES ");
@@ -10473,6 +10527,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             parameters.Add("@ResultFailReason" + i, e.ResultFailReason);
             parameters.Add("@Examined" + i, e.Examined ? 1 : 0);
             if (includeDuration) parameters.Add("@durationSecs" + i, Math.Max(1, e.DurationSecs ?? 1));
+            if (includeTokens) parameters.Add("@tokens" + i, e.Tokens.HasValue ? Math.Max(0, e.Tokens.Value) : null);
         }
 
         sb.Append(";");
@@ -10678,6 +10733,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             var sLower = s.ToLower();
             var hasThreadId = int.TryParse(s, out var threadIdSearch);
             var hasStoryId = long.TryParse(s, out var storyIdSearch);
+            var hasTokenValue = int.TryParse(s, out var tokenSearch);
 
             query = query.Where(l =>
                 (l.Level != null && l.Level.ToLower().Contains(sLower)) ||
@@ -10691,6 +10747,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
                 (l.Context != null && l.Context.ToLower().Contains(sLower)) ||
                 (l.State != null && l.State.ToLower().Contains(sLower)) ||
                 (l.Exception != null && l.Exception.ToLower().Contains(sLower)) ||
+                (hasTokenValue && l.Tokens.HasValue && l.Tokens.Value == tokenSearch) ||
                 (hasThreadId && l.ThreadId.HasValue && l.ThreadId.Value == threadIdSearch) ||
                 (hasStoryId && l.StoryId.HasValue && l.StoryId.Value == storyIdSearch));
         }
@@ -10707,6 +10764,7 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
             "failreason" => sortDesc ? query.OrderByDescending(l => l.ResultFailReason) : query.OrderBy(l => l.ResultFailReason),
             "operation" => sortDesc ? query.OrderByDescending(l => l.ThreadScope) : query.OrderBy(l => l.ThreadScope),
             "duration" => sortDesc ? query.OrderByDescending(l => l.DurationSecs) : query.OrderBy(l => l.DurationSecs),
+            "tokens" => sortDesc ? query.OrderByDescending(l => l.Tokens) : query.OrderBy(l => l.Tokens),
             "threadid" => sortDesc ? query.OrderByDescending(l => l.ThreadId) : query.OrderBy(l => l.ThreadId),
             "storyid" => sortDesc ? query.OrderByDescending(l => l.StoryId) : query.OrderBy(l => l.StoryId),
             "agent" => sortDesc ? query.OrderByDescending(l => l.AgentName) : query.OrderBy(l => l.AgentName),
@@ -10966,6 +11024,50 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         }
 
         log.Examined = examined;
+        context.SaveChanges();
+    }
+
+    public void UpdateLatestModelRequestTokensForAgent(int threadId, string? agentName, string? modelName, int tokens, long? storyId = null)
+    {
+        if (threadId <= 0) return;
+        if (tokens < 0) return;
+
+        var normalizedAgent = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim();
+        var normalizedModel = string.IsNullOrWhiteSpace(modelName) ? null : modelName.Trim();
+        var story = storyId.HasValue && storyId.Value > 0 && storyId.Value <= int.MaxValue
+            ? (int?)storyId.Value
+            : null;
+
+        using var context = CreateDbContext();
+        IQueryable<LogEntry> query = context.Logs
+            .Where(l =>
+                l.ThreadId == threadId &&
+                (l.Category == "ModelRequest" || l.Category == "ModelPrompt"));
+
+        if (!string.IsNullOrWhiteSpace(normalizedAgent))
+        {
+            query = query.Where(l => l.AgentName != null && l.AgentName != "" && l.AgentName.Trim() == normalizedAgent);
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedModel))
+        {
+            query = query.Where(l => l.ModelName != null && l.ModelName != "" && l.ModelName.Trim() == normalizedModel);
+        }
+
+        var log = story.HasValue
+            ? query.Where(l => l.StoryId.HasValue && l.StoryId.Value == story.Value)
+                .OrderByDescending(l => l.Id)
+                .FirstOrDefault()
+            : null;
+
+        if (log == null)
+        {
+            log = query.OrderByDescending(l => l.Id).FirstOrDefault();
+        }
+
+        if (log == null) return;
+
+        log.Tokens = tokens;
         context.SaveChanges();
     }
 
@@ -11276,13 +11378,18 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         var now = DateTime.UtcNow.ToString("o");
         using var conn = CreateConnection();
         conn.Open();
+        using var tx = conn.BeginTransaction();
         conn.Execute(@"
             UPDATE system_reports
             SET deleted = 1,
                 deleted_at = @now,
                 deleted_by = @by
             WHERE id = @id",
-            new { id = reportId, now, by = deletedBy ?? "system" });
+            new { id = reportId, now, by = deletedBy ?? "system" },
+            transaction: tx);
+
+        DeleteOrphanSystemReportsErrors(conn, tx);
+        tx.Commit();
     }
 
     public void DeleteAllSystemReports(string? deletedBy = null)
@@ -11290,12 +11397,17 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         var now = DateTime.UtcNow.ToString("o");
         using var conn = CreateConnection();
         conn.Open();
+        using var tx = conn.BeginTransaction();
         conn.Execute(@"
             UPDATE system_reports
             SET deleted = 1,
                 deleted_at = @now,
                 deleted_by = @by",
-            new { now, by = deletedBy ?? "system" });
+            new { now, by = deletedBy ?? "system" },
+            transaction: tx);
+
+        DeleteOrphanSystemReportsErrors(conn, tx);
+        tx.Commit();
     }
 
     public int DeleteSystemReportsByOperationType(string operationType, string? deletedBy = null)
@@ -11308,7 +11420,8 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
         var now = DateTime.UtcNow.ToString("o");
         using var conn = CreateConnection();
         conn.Open();
-        return conn.Execute(@"
+        using var tx = conn.BeginTransaction();
+        var affected = conn.Execute(@"
             UPDATE system_reports
             SET deleted = 1,
                 deleted_at = @now,
@@ -11320,7 +11433,26 @@ VALUES ('writer_cino', 'cino_optimize_story', datetime('now'), datetime('now'))"
                 now,
                 by = deletedBy ?? "system",
                 operationType = operationType.Trim()
-            });
+            },
+            transaction: tx);
+
+        DeleteOrphanSystemReportsErrors(conn, tx);
+        tx.Commit();
+        return affected;
+    }
+
+    private static void DeleteOrphanSystemReportsErrors(IDbConnection conn, IDbTransaction tx)
+    {
+        conn.Execute(@"
+DELETE FROM system_reports_errors
+WHERE id IN (
+    SELECT e.id
+    FROM system_reports_errors e
+    LEFT JOIN system_reports r
+      ON r.error_id = e.id
+     AND coalesce(r.deleted, 0) = 0
+    WHERE r.id IS NULL
+)", transaction: tx);
     }
 
     public SystemReport InsertSystemReport(SystemReport report)

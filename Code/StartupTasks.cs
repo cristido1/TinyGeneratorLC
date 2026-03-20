@@ -541,14 +541,14 @@ evaluate_full_story({
 
                 foreach (var agent in agents)
                 {
-                    var instr = agent.Instructions ?? string.Empty;
+                    var instr = agent.SystemPrompt ?? string.Empty;
                     if (instr.IndexOf("evaluate_full_story", StringComparison.OrdinalIgnoreCase) >= 0 &&
                         instr.IndexOf("action_score", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         continue; // already has an example or detailed guidance
                     }
 
-                    agent.Instructions = string.IsNullOrWhiteSpace(instr)
+                    agent.SystemPrompt = string.IsNullOrWhiteSpace(instr)
                         ? snippet
                         : instr.TrimEnd() + "\n\n" + snippet;
 
@@ -613,12 +613,12 @@ evaluate_full_story({
 
                 foreach (var agent in agents)
                 {
-                    var instr = agent.Instructions ?? string.Empty;
+                    var instr = agent.SystemPrompt ?? string.Empty;
                     var cleaned = RemoveLegacyValidationSnippet(instr, marker, note);
                     if (string.Equals(cleaned, instr, StringComparison.Ordinal))
                         continue;
 
-                    agent.Instructions = cleaned;
+                    agent.SystemPrompt = cleaned;
                     db.UpdateAgent(agent);
                     updated++;
                 }
@@ -652,7 +652,7 @@ evaluate_full_story({
                 {
                     var role = agent.Role!;
                     var requiredPlaceholders = SeriesPromptTemplates.RequiredPlaceholdersByRole[role];
-                    var prompt = agent.Prompt ?? string.Empty;
+                    var prompt = agent.UserPrompt ?? string.Empty;
 
                     var hasAllPlaceholders = requiredPlaceholders.All(p =>
                         prompt.IndexOf($"{{{{{p}}}}}", StringComparison.OrdinalIgnoreCase) >= 0);
@@ -663,7 +663,7 @@ evaluate_full_story({
 
                     if (string.IsNullOrWhiteSpace(prompt))
                     {
-                        agent.Prompt = SeriesPromptTemplates.GetDefaultTemplate(role);
+                        agent.UserPrompt = SeriesPromptTemplates.GetDefaultTemplate(role);
                         db.UpdateAgent(agent);
                         updated++;
                         continue;
@@ -683,7 +683,7 @@ evaluate_full_story({
                         sb.AppendLine($"{{{{{placeholder}}}}}");
                     }
 
-                    agent.Prompt = sb.ToString().TrimEnd();
+                    agent.UserPrompt = sb.ToString().TrimEnd();
                     db.UpdateAgent(agent);
                     updated++;
                 }

@@ -1,0 +1,343 @@
+is_global = true
+build_property.TargetFramework = net10.0
+build_property.TargetFramework = net10.0
+build_property.TargetPlatformMinVersion = 
+build_property.TargetPlatformMinVersion = 
+build_property.UsingMicrosoftNETSdkWeb = true
+build_property.UsingMicrosoftNETSdkWeb = true
+build_property.ProjectTypeGuids = 
+build_property.ProjectTypeGuids = 
+build_property.InvariantGlobalization = 
+build_property.InvariantGlobalization = 
+build_property.PlatformNeutralAssembly = 
+build_property.PlatformNeutralAssembly = 
+build_property.EnforceExtendedAnalyzerRules = 
+build_property.EnforceExtendedAnalyzerRules = 
+build_property._SupportedPlatformList = Linux,macOS,Windows
+build_property._SupportedPlatformList = Linux,macOS,Windows
+build_property.TargetFrameworkIdentifier = .NETCoreApp
+build_property.TargetFrameworkVersion = v10.0
+build_property.RootNamespace = TinyGenerator
+build_property.RootNamespace = TinyGenerator
+build_property.ProjectDir = C:\Users\User\Documents\ai\TinyGeneratorLC\
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 
+build_property.RazorLangVersion = 9.0
+build_property.SupportLocalizedComponentNames = 
+build_property.GenerateRazorMetadataSourceChecksumAttributes = 
+build_property.MSBuildProjectDirectory = C:\Users\User\Documents\ai\TinyGeneratorLC
+build_property._RazorSourceGeneratorDebug = 
+build_property.EffectiveAnalysisLevelStyle = 10.0
+build_property.EnableCodeStyleSeverity = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/GenericLookup/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xHZW5lcmljTG9va3VwXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/GenericLookup/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xHZW5lcmljTG9va3VwXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/GenericLookup/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xHZW5lcmljTG9va3VwXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/ModelRoleErrors/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xNb2RlbFJvbGVFcnJvcnNcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/PlannerMethods.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xQbGFubmVyTWV0aG9kcy5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StepTemplates/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdGVwVGVtcGxhdGVzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StepTemplates/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdGVwVGVtcGxhdGVzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StoriesStatus/Create.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdG9yaWVzU3RhdHVzXENyZWF0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StoriesStatus/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdG9yaWVzU3RhdHVzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StoriesStatus/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdG9yaWVzU3RhdHVzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/StoriesStatus/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xTdG9yaWVzU3RhdHVzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/TaskTypes/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xUYXNrVHlwZXNcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/deleted/Pages/TipoPlanning.cshtml]
+build_metadata.AdditionalFiles.TargetPath = ZGVsZXRlZFxQYWdlc1xUaXBvUGxhbm5pbmcuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Admin.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQWRtaW4uY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Chat.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ2hhdC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceImpacts/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VJbXBhY3RzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceImpacts/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VJbXBhY3RzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceImpacts/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VJbXBhY3RzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceRules/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VSdWxlc1xEZWxldGUuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceRules/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VSdWxlc1xFZGl0LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ConsequenceRules/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcQ29uc2VxdWVuY2VSdWxlc1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Error.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcRXJyb3IuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ExternalServicesMonitor.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcRXh0ZXJuYWxTZXJ2aWNlc01vbml0b3IuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/FailureRules/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcRmFpbHVyZVJ1bGVzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/FailureRules/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcRmFpbHVyZVJ1bGVzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/FailureRules/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcRmFpbHVyZVJ1bGVzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Genera.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcR2VuZXJhLmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/GeneraSerie/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcR2VuZXJhU2VyaWVcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Images/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcSW1hZ2VzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/LangChainTest.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTGFuZ0NoYWluVGVzdC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Logs/Analysis.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTG9nc1xBbmFseXNpcy5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Logs/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTG9nc1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Logs/LiveMonitor.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTG9nc1xMaXZlTW9uaXRvci5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Logs/Parlante.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTG9nc1xQYXJsYW50ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Metadata/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTWV0YWRhdGFcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/MicroObjectives/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTWljcm9PYmplY3RpdmVzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/MicroObjectives/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTWljcm9PYmplY3RpdmVzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/MicroObjectives/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTWljcm9PYmplY3RpdmVzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/ModelStats/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTW9kZWxTdGF0c1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Models/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTW9kZWxzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Models/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTW9kZWxzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Models/Index2.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTW9kZWxzXEluZGV4Mi5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeProfiles/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUHJvZmlsZXNcRGVsZXRlLmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeProfiles/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUHJvZmlsZXNcRWRpdC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeProfiles/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUHJvZmlsZXNcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeResources/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUmVzb3VyY2VzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeResources/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUmVzb3VyY2VzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/NarrativeResources/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcTmFycmF0aXZlUmVzb3VyY2VzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/OllamaMonitor.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcT2xsYW1hTW9uaXRvci5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Series/Delete.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2VyaWVzXERlbGV0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Series/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2VyaWVzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Series/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2VyaWVzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Series/_SeriesCharacter.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2VyaWVzXF9TZXJpZXNDaGFyYWN0ZXIuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Settings/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2V0dGluZ3NcSW5kZXguY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Settings/_JsonTreeNode.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2V0dGluZ3NcX0pzb25UcmVlTm9kZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Shared/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2hhcmVkXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Shared/_Layout.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2hhcmVkXF9MYXlvdXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Shared/_StoryEvaluationCard.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2hhcmVkXF9TdG9yeUV2YWx1YXRpb25DYXJkLmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Shared/_ValidationScriptsPartial.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU2hhcmVkXF9WYWxpZGF0aW9uU2NyaXB0c1BhcnRpYWwuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/SoundsMissing/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU291bmRzTWlzc2luZ1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Sounds/Create.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU291bmRzXENyZWF0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Sounds/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU291bmRzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Sounds/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU291bmRzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Stories/Create.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3Rvcmllc1xDcmVhdGUuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Stories/Details.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3Rvcmllc1xEZXRhaWxzLmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Stories/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3Rvcmllc1xFZGl0LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Stories/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3Rvcmllc1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Stories/TtsSchema.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3Rvcmllc1xUdHNTY2hlbWEuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/SystemReportsErrors/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3lzdGVtUmVwb3J0c0Vycm9yc1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/SystemReports/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcU3lzdGVtUmVwb3J0c1xJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/TtsVoices/Create.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcVHRzVm9pY2VzXENyZWF0ZS5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/TtsVoices/Edit.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcVHRzVm9pY2VzXEVkaXQuY3NodG1s
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/TtsVoices/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcVHRzVm9pY2VzXEluZGV4LmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Utilities/Narrative/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcVXRpbGl0aWVzXE5hcnJhdGl2ZVxJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/Utilities/SQL/Index.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcVXRpbGl0aWVzXFNRTFxJbmRleC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/_ViewImports.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcX1ZpZXdJbXBvcnRzLmNzaHRtbA==
+build_metadata.AdditionalFiles.CssScope = 
+
+[C:/Users/User/Documents/ai/TinyGeneratorLC/Pages/_ViewStart.cshtml]
+build_metadata.AdditionalFiles.TargetPath = UGFnZXNcX1ZpZXdTdGFydC5jc2h0bWw=
+build_metadata.AdditionalFiles.CssScope = 

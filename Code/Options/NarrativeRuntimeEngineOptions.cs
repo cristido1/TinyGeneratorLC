@@ -12,6 +12,8 @@ public sealed class NarrativeRuntimeEngineOptions
     public int MaxAgentFailuresBeforeStop { get; set; } = 1;
     public int PreviousBlocksWindow { get; set; } = 3;
     public int DuplicateSentenceHistoryBlocksWindow { get; set; } = 5;
+    public int DuplicateSentenceMinWords { get; set; } = 8;
+    public double DuplicateSentenceSimilarityThreshold { get; set; } = 0.95d;
     public double StateDrivenPlannerStepsMultiplier { get; set; } = 0.5d;
     public double SinglePassPlannerStepsMultiplier { get; set; } = 1.0d;
     public int DialogueTargetPercent { get; set; } = 40;

@@ -509,6 +509,7 @@ namespace TinyGenerator.Services
                     && LogScope.CurrentStoryId.Value <= int.MaxValue
                     ? (int?)LogScope.CurrentStoryId.Value
                     : null;
+                var usageTokens = TryExtractUsageTokens(responseJson);
 
                 var (textContent, _) = ParseChatResponse(responseJson);
                 var chatText = string.IsNullOrWhiteSpace(textContent) ? responseJson : textContent!;
@@ -531,10 +532,22 @@ namespace TinyGenerator.Services
                     Result = "SUCCESS",
                     ResultFailReason = null,
                     Examined = false,
-                    DurationSecs = 1
+                    DurationSecs = 1,
+                    Tokens = usageTokens.OutputTokens ?? usageTokens.TotalTokens
                 };
 
-                return db.InsertLogEntryImmediate(entry);
+                var logId = db.InsertLogEntryImmediate(entry);
+                if (usageTokens.PromptTokens.HasValue && usageTokens.PromptTokens.Value >= 0)
+                {
+                    db.UpdateLatestModelRequestTokensForAgent(
+                        effectiveThreadId,
+                        effectiveAgentName,
+                        modelId,
+                        usageTokens.PromptTokens.Value,
+                        storyId);
+                }
+
+                return logId;
             }
             catch
             {
@@ -1282,6 +1295,7 @@ namespace TinyGenerator.Services
                         { "stream", ollamaStreaming }
                     };
 
+                    var serializedMessages = SerializeConversationMessages(workingMessages);
                     var options = new Dictionary<string, object>
                     {
                         { "temperature", Temperature },
@@ -1296,7 +1310,16 @@ namespace TinyGenerator.Services
                     if (!_noRepeatLastNModels.Contains(_modelId) && RepeatLastN.HasValue) options["repeat_last_n"] = RepeatLastN.Value;
                     if (!_noNumPredictModels.Contains(_modelId))
                     {
-                        options["num_predict"] = NumPredict ?? -2;
+                        var numPredict = NumPredict ?? -2;
+                        if (numPredict > 0)
+                        {
+                            numPredict = ClampTokensToKnownContextBudget(
+                                numPredict,
+                                serializedMessages,
+                                tools,
+                                ResponseFormat != null);
+                        }
+                        options["num_predict"] = numPredict;
                     }
                     if (NumCtx.HasValue && NumCtx.Value > 0) options["num_ctx"] = NumCtx.Value;
 
@@ -1372,6 +1395,14 @@ namespace TinyGenerator.Services
                             if (_isVllm)
                             {
                                 effectiveMaxTokens = ClampVllmMaxTokens(
+                                    effectiveMaxTokens,
+                                    serializedMessages,
+                                    tools,
+                                    ResponseFormat != null);
+                            }
+                            else if (NumCtx.HasValue && NumCtx.Value > 0)
+                            {
+                                effectiveMaxTokens = ClampTokensToKnownContextBudget(
                                     effectiveMaxTokens,
                                     serializedMessages,
                                     tools,
@@ -1657,6 +1688,68 @@ namespace TinyGenerator.Services
             if (evalDuration.HasValue) payload["eval_duration"] = evalDuration.Value;
 
             return JsonSerializer.Serialize(payload);
+        }
+
+        private static (int? PromptTokens, int? OutputTokens, int? TotalTokens) TryExtractUsageTokens(string? responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson))
+            {
+                return (null, null, null);
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(responseJson);
+                var root = doc.RootElement;
+                static int? ReadInt(JsonElement parent, string name)
+                {
+                    if (!TryGetPropertyIgnoreCase(parent, name, out var value))
+                    {
+                        return null;
+                    }
+
+                    try
+                    {
+                        var parsed = value.ValueKind switch
+                        {
+                            JsonValueKind.Number when value.TryGetInt32(out var n32) => n32,
+                            JsonValueKind.Number when value.TryGetInt64(out var n64) => (int)Math.Clamp(n64, 0, int.MaxValue),
+                            JsonValueKind.String when int.TryParse(value.GetString(), out var s) => s,
+                            _ => -1
+                        };
+                        return parsed >= 0 ? parsed : null;
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                }
+
+                int? promptTokens = null;
+                int? outputTokens = null;
+                int? totalTokens = null;
+
+                if (TryGetPropertyIgnoreCase(root, "usage", out var usage) &&
+                    usage.ValueKind == JsonValueKind.Object)
+                {
+                    promptTokens = ReadInt(usage, "prompt_tokens");
+                    outputTokens = ReadInt(usage, "completion_tokens");
+                    outputTokens ??= ReadInt(usage, "output_tokens");
+                    totalTokens = ReadInt(usage, "total_tokens");
+                }
+
+                promptTokens ??= ReadInt(root, "prompt_eval_count");
+                outputTokens ??= ReadInt(root, "eval_count");
+                totalTokens ??= (promptTokens.HasValue || outputTokens.HasValue)
+                    ? (promptTokens ?? 0) + (outputTokens ?? 0)
+                    : null;
+
+                return (promptTokens, outputTokens, totalTokens);
+            }
+            catch
+            {
+                return (null, null, null);
+            }
         }
 
         /// <summary>
@@ -2280,6 +2373,27 @@ namespace TinyGenerator.Services
             }
 
             return Math.Min(positiveRequested, safeLimit);
+        }
+
+        private int ClampTokensToKnownContextBudget(
+            int requestedTokens,
+            IReadOnlyList<Dictionary<string, object>> serializedMessages,
+            IReadOnlyList<Dictionary<string, object>> tools,
+            bool hasStructuredResponseFormat)
+        {
+            var positiveRequested = Math.Max(1, requestedTokens);
+            if (!NumCtx.HasValue || NumCtx.Value <= 0)
+            {
+                return positiveRequested;
+            }
+
+            var estimatedInputTokens = EstimateVllmInputTokens(serializedMessages, tools, hasStructuredResponseFormat);
+            const int safetyBuffer = 64;
+            var safeLimit = NumCtx.Value - estimatedInputTokens - safetyBuffer;
+
+            // Avoid invalid requests where output pushes total tokens above context.
+            // If prompt is already too large, keep at least 1 token to let provider return a precise error.
+            return Math.Min(positiveRequested, Math.Max(1, safeLimit));
         }
 
         private static int EstimateVllmInputTokens(

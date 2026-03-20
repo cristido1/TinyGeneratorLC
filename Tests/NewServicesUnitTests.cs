@@ -31,8 +31,8 @@ public class AgentResolutionServiceTests
             Role = role,
             IsActive = true,
             ModelId = modelId,
-            Prompt = "Prompt base",
-            Instructions = "Istruzioni"
+            UserPrompt = "Prompt base",
+            SystemPrompt = "Istruzioni"
         });
 
         var sut = new AgentResolutionService(fixture.Db);

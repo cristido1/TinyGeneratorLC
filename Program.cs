@@ -342,6 +342,8 @@ builder.Services.AddSingleton<StoriesService>(sp => new StoriesService(
     sp.GetService<ICommandDispatcher>(),
     sp.GetService<MultiStepOrchestrationService>(),
     sp.GetService<SentimentMappingService>(),
+    responseChecker: sp.GetService<ResponseCheckerService>(),
+    tuningOptions: sp.GetService<IOptions<CommandTuningOptions>>(),
     ttsSchemaOptions: sp.GetService<IOptionsMonitor<TtsSchemaGenerationOptions>>(),
     audioGenerationOptions: sp.GetService<IOptionsMonitor<AudioGenerationOptions>>(),
     audioMixOptions: sp.GetService<IOptionsMonitor<AudioMixOptions>>(),

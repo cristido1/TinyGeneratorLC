@@ -152,11 +152,12 @@ namespace TinyGenerator.Services.Commands
                     {
                         Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.MusicExpert.MaxAttemptsPerChunk * 15)),
                         MaxRetries = Math.Max(0, _tuning.MusicExpert.MaxAttemptsPerChunk - 1),
-                        UseResponseChecker = true,
+                        // Avoid checker-driven retry loops for structured tag mapping.
+                        // Deterministic checks remain active via CallCenter.
+                        UseResponseChecker = false,
                         AskFailExplanation = _tuning.MusicExpert.DiagnoseOnFinalFailure,
                         AllowFallback = _tuning.MusicExpert.EnableFallback,
-                        Operation = CommandScopePaths.AddMusicTagsToStory,
-                        SystemPromptOverride = systemPrompt
+                        Operation = CommandScopePaths.AddMusicTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckMusicTagMinimumCount
                     {

@@ -43,11 +43,11 @@ namespace TinyGenerator.Models
         [Column("json_response_format")]
         public string? JsonResponseFormat { get; set; } // Nome file schema JSON (es. "full_evaluation.json")
         
-        [Column("prompt")]
-        public string? Prompt { get; set; }
+        [Column("user_prompt")]
+        public string? UserPrompt { get; set; }
         
-        [Column("instructions")]
-        public string? Instructions { get; set; }
+        [Column("system_prompt")]
+        public string? SystemPrompt { get; set; }
         
         [Column("execution_plan")]
         public string? ExecutionPlan { get; set; }

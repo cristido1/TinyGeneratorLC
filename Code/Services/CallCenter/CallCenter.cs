@@ -108,6 +108,7 @@ public sealed class CallCenter : ICallCenter
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            PublishRetryProgressToCommandPanel(options, attemptsCurrentAgent);
             currentAgent = ApplyMonomodelOverrideIfActive(currentAgent);
             var modelName = ResolveModelName(currentAgent) ?? "unknown";
             if (!string.IsNullOrWhiteSpace(modelName))
@@ -207,6 +208,7 @@ public sealed class CallCenter : ICallCenter
 
             attemptsCurrentAgent += Math.Max(1, result.AttemptsUsed);
             attemptsTotal += Math.Max(1, result.AttemptsUsed);
+            PublishRetryProgressToCommandPanel(options, attemptsCurrentAgent);
             if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
             {
                 var normalizedResponse = result.Text.Trim();
@@ -784,8 +786,8 @@ public sealed class CallCenter : ICallCenter
             Skills = source.Skills,
             Config = source.Config,
             JsonResponseFormat = source.JsonResponseFormat,
-            Prompt = source.Prompt,
-            Instructions = source.Instructions,
+            UserPrompt = source.UserPrompt,
+            SystemPrompt = source.SystemPrompt,
             ExecutionPlan = source.ExecutionPlan,
             IsActive = source.IsActive,
             CreatedAt = source.CreatedAt,
@@ -934,7 +936,8 @@ public sealed class CallCenter : ICallCenter
                     // Keep this disabled here so checker failures are propagated to the primary call.
                     UseResponseChecker = false,
                     AskFailExplanation = false,
-                    AllowFallback = true
+                    AllowFallback = true,
+                    PublishRetryProgressToCommandPanel = false
                 };
 
                 var checkerResult = await nestedCallCenter.CallAgentAsync(
@@ -1135,6 +1138,38 @@ public sealed class CallCenter : ICallCenter
         }
 
         return value.Trim();
+    }
+
+    private static void PublishRetryProgressToCommandPanel(CallOptions? options, int attemptsCurrentAgent)
+    {
+        if (options?.PublishRetryProgressToCommandPanel != true)
+        {
+            return;
+        }
+
+        var runId = LogScope.CurrentRunId;
+        if (string.IsNullOrWhiteSpace(runId))
+        {
+            return;
+        }
+
+        var maxRetry = Math.Max(0, options?.MaxRetries ?? 0);
+        var retryCount = Math.Max(0, attemptsCurrentAgent - 1);
+
+        try
+        {
+            if (ServiceLocator.Services?.GetService<ICommandDispatcher>() is CommandDispatcher dispatcher)
+            {
+                dispatcher.UpdateCallCenterRetry(runId, retryCount, maxRetry);
+                return;
+            }
+
+            ServiceLocator.Services?.GetService<ICommandDispatcher>()?.UpdateRetry(runId, retryCount);
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     private static bool IsNonRetriableVllmPromptContextError(string? value)

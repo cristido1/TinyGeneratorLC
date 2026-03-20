@@ -22,8 +22,8 @@ namespace TinyGenerator.Controllers
 
             // Compose a simple description from available fields
             var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(agent.Prompt)) parts.Add("Prompt: " + agent.Prompt);
-            if (!string.IsNullOrWhiteSpace(agent.Instructions)) parts.Add("Instructions: " + agent.Instructions);
+            if (!string.IsNullOrWhiteSpace(agent.UserPrompt)) parts.Add("User Prompt: " + agent.UserPrompt);
+            if (!string.IsNullOrWhiteSpace(agent.SystemPrompt)) parts.Add("System Prompt: " + agent.SystemPrompt);
             if (!string.IsNullOrWhiteSpace(agent.Config)) parts.Add("Config: " + agent.Config);
             if (!string.IsNullOrWhiteSpace(agent.ExecutionPlan)) parts.Add("Execution Plan: " + agent.ExecutionPlan);
             if (!string.IsNullOrWhiteSpace(agent.Notes)) parts.Add("Notes: " + agent.Notes);

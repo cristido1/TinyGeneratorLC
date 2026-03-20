@@ -52,6 +52,7 @@ public sealed class CheckDialogueRatioRange : CheckBase
                 count++;
             }
         }
+
         return count;
     }
 
@@ -59,11 +60,11 @@ public sealed class CheckDialogueRatioRange : CheckBase
     {
         var total = 0;
 
-        // Dialoghi tra caporali.
-        total += SumMatches(text, "«[^»\\r\\n]{2,}»");
-        // Dialoghi tra virgolette tipografiche.
-        total += SumMatches(text, "“[^”\\r\\n]{2,}”");
-        // Dialoghi tra doppi apici sulla stessa riga.
+        // Dialoghi tra caporali: « ... »
+        total += SumMatches(text, "\\u00AB[^\\u00BB\\r\\n]{2,}\\u00BB");
+        // Dialoghi tra virgolette tipografiche: “ ... ”
+        total += SumMatches(text, "\\u201C[^\\u201D\\r\\n]{2,}\\u201D");
+        // Dialoghi tra doppi apici ASCII: " ... "
         total += SumMatches(text, "\"[^\"\\r\\n]{2,}\"");
 
         // Battute con trattino iniziale.
@@ -71,7 +72,7 @@ public sealed class CheckDialogueRatioRange : CheckBase
         foreach (var raw in lines)
         {
             var line = raw.Trim();
-            if (line.StartsWith("- ") || line.StartsWith("— ") || line.StartsWith("– "))
+            if (line.StartsWith("- ") || line.StartsWith("\u2014 ") || line.StartsWith("\u2013 "))
             {
                 total += Math.Max(0, line.Length - 2);
             }
@@ -90,6 +91,7 @@ public sealed class CheckDialogueRatioRange : CheckBase
                 sum += match.Length;
             }
         }
+
         return sum;
     }
 

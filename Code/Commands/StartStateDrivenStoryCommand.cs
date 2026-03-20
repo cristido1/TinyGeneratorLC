@@ -100,7 +100,7 @@ public sealed class StartStateDrivenStoryCommand : ICommand
             return false;
         }
 
-        var systemPrompt = resourceManager.Instructions ?? resourceManager.Prompt ?? "Genera lo stato iniziale risorse in JSON valido.";
+        var systemPrompt = resourceManager.SystemPrompt ?? resourceManager.UserPrompt ?? "Genera lo stato iniziale risorse in JSON valido.";
         var history = new ChatHistory();
         history.AddSystem(systemPrompt);
         history.AddUser(BuildResourceManagerInitPrompt(storyId, title, theme, serieId, serieEpisode, resourceHints));
@@ -112,8 +112,7 @@ public sealed class StartStateDrivenStoryCommand : ICommand
             MaxRetries = 1,
             UseResponseChecker = true,
             AllowFallback = true,
-            AskFailExplanation = true,
-            SystemPromptOverride = systemPrompt
+            AskFailExplanation = true
         };
         options.DeterministicChecks.Add(new CheckEmpty
         {

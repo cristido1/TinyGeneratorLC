@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -381,7 +381,7 @@ public class NreEngine : IEngine
                     modelName: ResolveAgentModelName(ctx.WriterAgent),
                     currentStep: 1,
                     maxStep: 1,
-                    stepDescription: "Writer • single_pass");
+                    stepDescription: "Writer â€¢ single_pass");
                 var writerResult = await CallAgentAsync(
                     ctx,
                     ctx.WriterAgent,
@@ -398,7 +398,7 @@ public class NreEngine : IEngine
                     modelName: string.IsNullOrWhiteSpace(writerResult.ModelUsed) ? ResolveAgentModelName(ctx.WriterAgent) : writerResult.ModelUsed,
                     currentStep: 1,
                     maxStep: 1,
-                    stepDescription: "Writer • single_pass");
+                    stepDescription: "Writer â€¢ single_pass");
 
                 if (!writerResult.Success)
                 {
@@ -503,7 +503,7 @@ public class NreEngine : IEngine
                         modelName: ResolveAgentModelName(ctx.WriterAgent),
                         currentStep: step,
                         maxStep: effectiveMaxSteps,
-                        stepDescription: $"Writer • {phase.Name}");
+                        stepDescription: $"Writer â€¢ {phase.Name}");
                     var writerResult = await CallAgentAsync(
                         ctx,
                         ctx.WriterAgent,
@@ -527,7 +527,7 @@ public class NreEngine : IEngine
                         modelName: string.IsNullOrWhiteSpace(writerResult.ModelUsed) ? ResolveAgentModelName(ctx.WriterAgent) : writerResult.ModelUsed,
                         currentStep: step,
                         maxStep: effectiveMaxSteps,
-                        stepDescription: $"Writer • {phase.Name}");
+                        stepDescription: $"Writer â€¢ {phase.Name}");
 
                     if (!writerResult.Success)
                     {
@@ -597,7 +597,7 @@ public class NreEngine : IEngine
                         modelName: ResolveAgentModelName(ctx.ResourceManagerAgent),
                         currentStep: step,
                         maxStep: effectiveMaxSteps,
-                        stepDescription: $"ResourceManager UPDATE • {phase.Name}");
+                        stepDescription: $"ResourceManager UPDATE â€¢ {phase.Name}");
                     var resourceManagerUpdate = await UpdateResourceManagerStateAsync(
                         ctx,
                         phase,
@@ -1328,9 +1328,9 @@ public class NreEngine : IEngine
             Options = Options.Create<object>(new Dictionary<string, object>
             {
                 ["HistoryText"] = historyText,
-                ["MinWords"] = 6,
-                ["SimilarityThreshold"] = 0.92d,
-                ["IgnoreSentencesCsv"] = "ricevuto,sì signore,si signore"
+                ["MinWords"] = Math.Max(1, nreOptions.DuplicateSentenceMinWords),
+                ["SimilarityThreshold"] = Math.Clamp(nreOptions.DuplicateSentenceSimilarityThreshold, 0.5d, 0.999d),
+                ["IgnoreSentencesCsv"] = "ricevuto,sÃ¬ signore,si signore"
             })
         });
 
@@ -1660,13 +1660,8 @@ public class NreEngine : IEngine
         string? costSeverity,
         string? combatIntensity)
     {
-        // Limitiamo il contesto dell'evaluator per ridurre il rischio di overflow del model context.
-        var evaluatorWindow = Math.Max(1, Math.Min(previousBlocksWindow, 1));
-        var tail = blocks
-            .TakeLast(evaluatorWindow)
-            .Select(b => $"- {b.Text}")
-            .ToList();
-        var previousBlocks = tail.Count == 0 ? "(nessuno)" : string.Join(Environment.NewLine + Environment.NewLine, tail);
+        _ = previousBlocksWindow;
+        var previousStorySummary = BuildPreviousStorySummaryForEvaluator(blocks);
         var normalizedStructureMode = NormalizeStructureMode(structureMode);
         var normalizedCostSeverity = NormalizeCostSeverity(costSeverity);
         var normalizedCombatIntensity = NormalizeCombatIntensity(combatIntensity);
@@ -1681,9 +1676,49 @@ public class NreEngine : IEngine
             $"- structure_mode: {normalizedStructureMode}{Environment.NewLine}" +
             $"- cost_severity: {normalizedCostSeverity}{Environment.NewLine}" +
             $"- combat_intensity: {normalizedCombatIntensity}{Environment.NewLine}{Environment.NewLine}" +
-            $"Blocchi precedenti:{Environment.NewLine}{previousBlocks}{Environment.NewLine}{Environment.NewLine}" +
+            $"RIASSUNTO STORIA PRECEDENTE:{Environment.NewLine}{previousStorySummary}{Environment.NewLine}{Environment.NewLine}" +
+            "CHUNK ATTUALE: e' sempre CandidateResponse (fornito dal CallCenter)." + Environment.NewLine +
             "Valuta se CandidateResponse rispetta esplicitamente le regole della fase corrente, la coerenza narrativa e i vincoli della modalita'." + Environment.NewLine +
             "CandidateResponse: verra' fornita dal CallCenter al checker.";
+    }
+
+    private static string BuildPreviousStorySummaryForEvaluator(List<NarrativeBlock> blocks)
+    {
+        if (blocks == null || blocks.Count == 0)
+        {
+            return "(nessun blocco precedente)";
+        }
+
+        const int maxTotalChars = 7000;
+        const int maxBlockChars = 280;
+
+        static string Compact(string? text, int maxLen)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "-";
+            var compact = Regex.Replace(text.Trim(), "\\s+", " ");
+            return compact.Length <= maxLen ? compact : compact[..maxLen].TrimEnd() + "...";
+        }
+
+        var lines = new List<string>(blocks.Count + 1);
+        var totalChars = 0;
+        foreach (var block in blocks)
+        {
+            if (block == null) continue;
+            var idx = block.Index > 0 ? block.Index : (lines.Count + 1);
+            var phase = string.IsNullOrWhiteSpace(block.Phase) ? "-" : block.Phase!.Trim();
+            var line = $"{idx}. [phase={phase}] {Compact(block.Text, maxBlockChars)}";
+            var projected = totalChars + line.Length + Environment.NewLine.Length;
+            if (projected > maxTotalChars)
+            {
+                lines.Add($"... ({blocks.Count - (lines.Count)} blocchi precedenti omessi per limite contesto)");
+                break;
+            }
+
+            lines.Add(line);
+            totalChars = projected;
+        }
+
+        return lines.Count == 0 ? "(nessun blocco precedente)" : string.Join(Environment.NewLine, lines);
     }
 
     private static string BuildPlannerEvaluatorInput(
@@ -2216,3 +2251,4 @@ CandidateResponse planner (YAML):
         public List<string>? Issues { get; set; }
     }
 }
+

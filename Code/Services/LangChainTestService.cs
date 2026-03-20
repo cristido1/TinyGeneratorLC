@@ -845,8 +845,8 @@ namespace TinyGenerator.Services
             var ttsStory = _database.GetStoryById(23);
             var ttsStoryText = ttsStory?.StoryRaw ?? prompt;
             var allowedPlugins = ParseAgentSkills(ttsAgent) ?? ParseAllowedPlugins(test);
-            var agentPrompt = !string.IsNullOrWhiteSpace(ttsAgent?.Prompt)
-                ? ttsAgent.Prompt!
+            var agentPrompt = !string.IsNullOrWhiteSpace(ttsAgent?.UserPrompt)
+                ? ttsAgent.UserPrompt!
                 : prompt;
 
             if (!string.IsNullOrWhiteSpace(ttsStoryText))
@@ -867,11 +867,11 @@ namespace TinyGenerator.Services
 
                     var executionPlan = LoadExecutionPlan(test.ExecutionPlan);
                     var fullPrompt = $"{agentPrompt}\n\nQuesta è la storia:\n{ttsStoryText}";
-                    var systemMessage = string.IsNullOrWhiteSpace(ttsAgent?.Instructions)
+                    var systemMessage = string.IsNullOrWhiteSpace(ttsAgent?.SystemPrompt)
                         ? executionPlan
                         : string.IsNullOrWhiteSpace(executionPlan)
-                            ? ttsAgent.Instructions
-                            : $"{ttsAgent.Instructions}\n\n{executionPlan}";
+                            ? ttsAgent.SystemPrompt
+                            : $"{ttsAgent.SystemPrompt}\n\n{executionPlan}";
 
                     var hasTools = orchestrator.GetToolSchemas().Any();
                     fullPrompt = AppendResponseFormatToPrompt(fullPrompt, test.JsonResponseFormat, hasTools, test);

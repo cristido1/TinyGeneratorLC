@@ -149,11 +149,12 @@ namespace TinyGenerator.Services.Commands
                     {
                         Timeout = TimeSpan.FromSeconds(Math.Max(1, _tuning.FxExpert.MaxAttemptsPerChunk * 15)),
                         MaxRetries = Math.Max(0, _tuning.FxExpert.MaxAttemptsPerChunk - 1),
-                        UseResponseChecker = true,
+                        // Response checker sta producendo falsi negativi su FX ("output troncato")
+                        // anche con JSON valido; manteniamo la validazione tramite deterministic checks.
+                        UseResponseChecker = false,
                         AskFailExplanation = _tuning.FxExpert.DiagnoseOnFinalFailure,
                         AllowFallback = _tuning.FxExpert.EnableFallback,
-                        Operation = CommandScopePaths.AddFxTagsToStory,
-                        SystemPromptOverride = systemPrompt
+                        Operation = CommandScopePaths.AddFxTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckFxMappingValidity
                     {

@@ -11,7 +11,7 @@ namespace TinyGenerator.Services
     {
         private sealed class ScopeInfo
         {
-            public ScopeInfo(string name, long? operationId, int? stepNumber = null, int? maxStep = null, string? agentName = null, string? agentRole = null, int? threadId = null, long? storyId = null)
+            public ScopeInfo(string name, long? operationId, int? stepNumber = null, int? maxStep = null, string? agentName = null, string? agentRole = null, int? threadId = null, long? storyId = null, string? runId = null)
             {
                 Name = name;
                 OperationId = operationId;
@@ -21,6 +21,7 @@ namespace TinyGenerator.Services
                 AgentRole = agentRole;
                 ThreadId = threadId;
                 StoryId = storyId;
+                RunId = runId;
             }
 
             public string Name { get; }
@@ -31,6 +32,7 @@ namespace TinyGenerator.Services
             public string? AgentRole { get; }
             public int? ThreadId { get; }
             public long? StoryId { get; }
+            public string? RunId { get; }
         }
 
         private static long _operationCounter;
@@ -48,7 +50,7 @@ namespace TinyGenerator.Services
         public static IDisposable Push(string scope, long? operationId, int? stepNumber, int? maxStep)
             => Push(scope, operationId, stepNumber, maxStep, null);
 
-        public static IDisposable Push(string scope, long? operationId, int? stepNumber, int? maxStep, string? agentName, string? agentRole = null, int? threadId = null, long? storyId = null)
+        public static IDisposable Push(string scope, long? operationId, int? stepNumber, int? maxStep, string? agentName, string? agentRole = null, int? threadId = null, long? storyId = null, string? runId = null)
         {
             if (string.IsNullOrWhiteSpace(scope))
             {
@@ -72,8 +74,9 @@ namespace TinyGenerator.Services
             // Inherit ids if not provided
             var inheritedThreadId = threadId ?? (stack.Count > 0 ? stack.Peek().ThreadId : null);
             var inheritedStoryId = storyId ?? (stack.Count > 0 ? stack.Peek().StoryId : null);
+            var inheritedRunId = runId ?? (stack.Count > 0 ? stack.Peek().RunId : null);
 
-            stack.Push(new ScopeInfo(scope, inheritedOperation, inheritedStep, inheritedMax, inheritedAgent, inheritedRole, inheritedThreadId, inheritedStoryId));
+            stack.Push(new ScopeInfo(scope, inheritedOperation, inheritedStep, inheritedMax, inheritedAgent, inheritedRole, inheritedThreadId, inheritedStoryId, inheritedRunId));
             return new ScopeHandle(stack);
         }
 
@@ -154,6 +157,16 @@ namespace TinyGenerator.Services
                 var stack = _scopes.Value;
                 if (stack == null || stack.Count == 0) return null;
                 return stack.Peek().StoryId;
+            }
+        }
+
+        public static string? CurrentRunId
+        {
+            get
+            {
+                var stack = _scopes.Value;
+                if (stack == null || stack.Count == 0) return null;
+                return stack.Peek().RunId;
             }
         }
 

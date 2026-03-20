@@ -139,8 +139,7 @@ namespace TinyGenerator.Services.Commands
                         UseResponseChecker = true,
                         AskFailExplanation = _tuning.AmbientExpert.DiagnoseOnFinalFailure,
                         AllowFallback = _tuning.AmbientExpert.EnableFallback,
-                        Operation = CommandScopePaths.AddAmbientTagsToStory,
-                        SystemPromptOverride = systemPrompt
+                        Operation = CommandScopePaths.AddAmbientTagsToStory
                     };
                     callOptions.DeterministicChecks.Add(new CheckAmbientTagMinimumCount
                     {

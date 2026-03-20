@@ -1,6 +1,6 @@
 @echo off
-REM vllm_start.bat
-REM Avvia (o riavvia) il container vLLM per TinyGenerator con parametri stabili.
+REM vllm_start_4b.bat
+REM Avvia (o riavvia) il container vLLM per TinyGenerator con Qwen3.5 4B AWQ.
 
 SETLOCAL EnableExtensions
 
@@ -10,12 +10,10 @@ set "HOST_PORT=8000"
 set "CONTAINER_PORT=8000"
 set "HOST_MODELS_PATH=C:\vllm_models"
 set "CONTAINER_MODELS_PATH=/models"
-set "MODEL_SUBDIR=Vishva007--Qwen3.5-9B-W4A16-AutoRound-GPTQ"
+set "MODEL_SUBDIR=QuantTrio--Qwen3.5-4B-AWQ"
 set "MODEL_PATH=%CONTAINER_MODELS_PATH%/%MODEL_SUBDIR%"
-set "TOKENIZER_SUBDIR=QuantTrio--Qwen3.5-9B-AWQ"
-set "TOKENIZER_PATH=%CONTAINER_MODELS_PATH%/%TOKENIZER_SUBDIR%"
-set "SERVED_MODEL_NAME=Vishva007/Qwen3.5-9B-GPTQ"
-set "MONOMODEL_DESCRIPTION=Qwen3.5-9B-GPTQ vLLM"
+set "SERVED_MODEL_NAME=QuantTrio/Qwen3.5-4B-AWQ"
+set "MONOMODEL_DESCRIPTION=Qwen3.5-4B-AWQ vLLM"
 set "APPSETTINGS_PATH=%~dp0appsettings.json"
 
 REM Parametri runtime
@@ -40,12 +38,6 @@ if not exist "%HOST_MODELS_PATH%\%MODEL_SUBDIR%" (
   exit /b 1
 )
 
-if not exist "%HOST_MODELS_PATH%\%TOKENIZER_SUBDIR%" (
-  echo Errore: tokenizer non trovato in "%HOST_MODELS_PATH%\%TOKENIZER_SUBDIR%".
-  pause
-  exit /b 1
-)
-
 echo [vLLM] Sincronizzazione MonomodelMode in appsettings.json...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%APPSETTINGS_PATH%'; $d='%MONOMODEL_DESCRIPTION%'; if(Test-Path $p){ $raw=Get-Content -Raw -Path $p; $new=[regex]::Replace($raw,'(\"ModelDescription\"\s*:\s*\")[^\"]*(\")',('$1'+$d+'$2'),1); if($new -ne $raw){ Set-Content -Path $p -Value $new -Encoding UTF8; Write-Host '[vLLM] MonomodelMode.ModelDescription aggiornato:' $d } else { Write-Host '[vLLM] Nessuna modifica MonomodelMode (pattern non trovato).' } } else { Write-Host '[vLLM] appsettings.json non trovato:' $p }"
 
@@ -57,7 +49,6 @@ if not "%VLLM_API_KEY%"=="" set "API_KEY_ARG=-e VLLM_API_KEY=%VLLM_API_KEY%"
 
 echo [vLLM] Avvio container "%CONTAINER_NAME%"...
 echo [vLLM] Model: %MODEL_PATH%
-echo [vLLM] Tokenizer: %TOKENIZER_PATH%
 echo [vLLM] Served model: %SERVED_MODEL_NAME%
 echo [vLLM] Multi-modal disabilitato: %LIMIT_MM_PER_PROMPT%
 echo [vLLM] Port: %HOST_PORT%
@@ -74,7 +65,6 @@ docker run -d --restart unless-stopped ^
   --host 0.0.0.0 ^
   --port %CONTAINER_PORT% ^
   --served-model-name "%SERVED_MODEL_NAME%" ^
-  --tokenizer "%TOKENIZER_PATH%" ^
   --gpu-memory-utilization %GPU_MEMORY_UTIL% ^
   --max-model-len %MAX_MODEL_LEN% ^
   --max-num-seqs %MAX_NUM_SEQS% ^

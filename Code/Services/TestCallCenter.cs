@@ -38,7 +38,7 @@ public class TestCallCenter : ITestCallCenter
             Name = "test_call_center",
             Role = "test_runner",
             ModelName = request.ModelName.Trim(),
-            Instructions = request.SystemPrompt,
+            SystemPrompt = request.SystemPrompt,
             Temperature = request.Temperature,
             TopP = request.TopP,
             NumPredict = request.NumPredict,

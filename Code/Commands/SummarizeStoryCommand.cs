@@ -102,7 +102,7 @@ namespace TinyGenerator.Services.Commands
                     return Fail(runId, "ICallCenter non disponibile: chiamata centralizzata disabilitata");
                 }
 
-                var systemPrompt = summarizerAgent.Instructions ?? summarizerAgent.Prompt ?? "Sei un summarizer esperto.";
+                var systemPrompt = summarizerAgent.SystemPrompt ?? summarizerAgent.UserPrompt ?? "Sei un summarizer esperto.";
                 var history = new ChatHistory();
                 history.AddSystem(systemPrompt);
                 history.AddUser(summarizerPrompt);
@@ -114,8 +114,7 @@ namespace TinyGenerator.Services.Commands
                     MaxRetries = 1,
                     UseResponseChecker = false,
                     AllowFallback = true,
-                    AskFailExplanation = true,
-                    SystemPromptOverride = systemPrompt
+                    AskFailExplanation = true
                 };
                 options.DeterministicChecks.Add(new CheckEmpty
                 {

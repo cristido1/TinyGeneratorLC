@@ -277,6 +277,15 @@
                         {
                             <option value="complete_existing_first">Completa storie esistenti prima di crearne nuove</option>
                         }
+
+                        @if (Model.AutoAdvancementMode == "complete_existing_then_vatican")
+                        {
+                            <option value="complete_existing_then_vatican" selected>Completa esistenti, poi genera solo storie Vaticano</option>
+                        }
+                        else
+                        {
+                            <option value="complete_existing_then_vatican">Completa esistenti, poi genera solo storie Vaticano</option>
+                        }
                     </select>
                 </div>
             </form>
@@ -317,6 +326,21 @@
                             }
                         }
                     </select>
+                </div>
+            </form>
+            <form method="post" asp-page-handler="SetCommandDispatcherParallelism" id="dispatcherParallelismForm" class="mt-3">
+                <label for="maxParallelCommands" class="form-label mb-1"><strong>Processi agentici CommandDispatcher</strong></label>
+                <input id="maxParallelCommands"
+                       name="maxParallelCommands"
+                       type="number"
+                       class="form-control form-control-sm"
+                       style="max-width: 220px;"
+                       min="1"
+                       max="64"
+                       value="@Model.CommandDispatcherMaxParallelCommands"
+                       onchange="this.form.submit();" />
+                <div class="text-muted small mt-1">
+                    Valore applicato subito al dispatcher e salvato in <code>appsettings.json</code>.
                 </div>
             </form>
         </div>

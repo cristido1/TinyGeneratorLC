@@ -336,7 +336,7 @@ public class SentimentMappingService
 
             var ollamaEndpoint = ExternalServerConfig.GetRequiredValue(_configuration, "Ollama:Endpoint");
 
-            var prompt = agent?.Prompt?.Replace("{{sentiment}}", sourceSentiment)
+            var prompt = agent?.UserPrompt?.Replace("{{sentiment}}", sourceSentiment)
                 ?? $@"Mappa il sentimento '{sourceSentiment}' a UNO solo di questi valori:
 neutral, happy, sad, angry, fearful, disgusted, surprised
 

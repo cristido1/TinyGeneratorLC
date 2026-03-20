@@ -34,6 +34,7 @@ public sealed class CallOptions
     public bool UseResponseChecker { get; set; } = true;
     public bool AskFailExplanation { get; set; } = true;
     public bool AllowFallback { get; set; } = true;
+    public bool PublishRetryProgressToCommandPanel { get; set; } = true;
 
     // Extra metadata for policy routing/logging in the centralized executor.
     public string Operation { get; set; } = "call_center";

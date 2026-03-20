@@ -1003,8 +1003,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
                         Skills = request.Agent.Skills,
                         Config = request.Agent.Config,
                         JsonResponseFormat = request.Agent.JsonResponseFormat,
-                        Prompt = request.Agent.Prompt,
-                        Instructions = request.Agent.Instructions,
+                        UserPrompt = request.Agent.UserPrompt,
+                        SystemPrompt = request.Agent.SystemPrompt,
                         ExecutionPlan = request.Agent.ExecutionPlan,
                         IsActive = request.Agent.IsActive,
                         CreatedAt = request.Agent.CreatedAt,
@@ -2089,8 +2089,8 @@ public sealed class CommandModelExecutionService : IAgentCallService
     }
 
     private static string BuildSystemPrompt(Agent agent)
-        => !string.IsNullOrWhiteSpace(agent.Instructions) ? agent.Instructions! :
-           !string.IsNullOrWhiteSpace(agent.Prompt) ? agent.Prompt! : "Sei un assistente esperto.";
+        => !string.IsNullOrWhiteSpace(agent.SystemPrompt) ? agent.SystemPrompt! :
+           !string.IsNullOrWhiteSpace(agent.UserPrompt) ? agent.UserPrompt! : "Sei un assistente esperto.";
 
     private string BuildSystemPromptWithDynamic(Request request, string modelName, string roleCode, int? modelIdOverride)
     {

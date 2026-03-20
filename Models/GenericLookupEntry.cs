@@ -24,6 +24,10 @@ public sealed partial class GenericLookupEntry : ISoftDelete, IActiveFlag, IOrde
     [StringLength(500)]
     public string? Description { get; set; }
 
+    [StringLength(50)]
+    [Column("filter")]
+    public string Filter { get; set; } = "random";
+
     [Column("sort_order")]
     public int SortOrder { get; set; }
     public bool IsActive { get; set; } = true;

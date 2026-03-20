@@ -197,12 +197,12 @@
                 var roleBadgeClass = level == "good"
                     ? "bg-success"
                     : (level == "mid" ? "bg-warning text-dark" : (level == "bad" ? "bg-danger" : "bg-secondary"));
-                var toggleLabel = mr.Enabled ? "Disabilita" : "Abilita";
+                var toggleLabel = mr.IsActive ? "Disabilita" : "Abilita";
                 var speedIndex = Model.GetSpeedIndex(mr.Id);
                 var speedBadgeClass = speedIndex >= 8
                     ? "bg-success"
                     : (speedIndex >= 5 ? "bg-warning text-dark" : (speedIndex >= 3 ? "bg-orange text-dark" : "bg-danger"));
-                <tr data-id="@mr.Id" data-enabled="@(mr.Enabled ? "true" : "false")" class="@(mr.Enabled ? string.Empty : "fallback-disabled-row")">
+                <tr data-id="@mr.Id" data-enabled="@(mr.IsActive ? "true" : "false")" class="@(mr.IsActive ? string.Empty : "fallback-disabled-row")">
                     <td class="dt-control"></td>
                     <td data-col="model"><strong class="@textClass">@mr.Model?.Name</strong></td>
                     <td data-col="role"><span class="badge @roleBadgeClass">@mr.Role?.Name</span></td>
@@ -221,7 +221,7 @@
                     <td data-col="rate"><span class="@textClass">@((mr.SuccessRate * 100).ToString("0.0"))%</span></td>
                     <td data-col="thinking">@(mr.Thinking.HasValue ? (mr.Thinking.Value ? "true" : "false") : "null")</td>
                     <td data-col="lastuse">@Model.FormatLastUse(mr.LastUse)</td>
-                    <td data-col="enabled">@(mr.Enabled ? "Yes" : "No")</td>
+                    <td data-col="enabled">@(mr.IsActive ? "Yes" : "No")</td>
                     <td data-col="actions">
                         <div class="dropdown">
                             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">Azioni</button>

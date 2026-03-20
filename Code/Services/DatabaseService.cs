@@ -7942,6 +7942,7 @@ SELECT
     Code,
     Value,
     Description,
+    COALESCE(NULLIF(trim(filter), ''), 'random') AS Filter,
     COALESCE(sort_order, 0) AS SortOrder,
     COALESCE(IsActive, 0) AS IsActive,
     COALESCE(Weight, 1) AS Weight,
@@ -7954,6 +7955,7 @@ WHERE (@type IS NULL OR @type = '' OR lower(Type) = lower(@type))
         OR lower(Type) LIKE '%' || lower(@search) || '%'
         OR lower(Code) LIKE '%' || lower(@search) || '%'
         OR lower(Value) LIKE '%' || lower(@search) || '%'
+        OR lower(COALESCE(filter, '')) LIKE '%' || lower(@search) || '%'
         OR lower(COALESCE(Description, '')) LIKE '%' || lower(@search) || '%'
       )
 ORDER BY lower(Type) ASC, COALESCE(sort_order, 0) ASC, lower(Value) ASC, Id ASC;";
@@ -7974,6 +7976,7 @@ SELECT
     Code,
     Value,
     Description,
+    COALESCE(NULLIF(trim(filter), ''), 'random') AS Filter,
     COALESCE(sort_order, 0) AS SortOrder,
     COALESCE(IsActive, 0) AS IsActive,
     COALESCE(Weight, 1) AS Weight,
@@ -7997,9 +8000,10 @@ WHERE Type IS NOT NULL AND trim(Type) <> ''
 ORDER BY lower(trim(Type));").ToList();
     }
 
-    public string? PickRandomGenericLookupValueByTypeWeighted(string? type)
+    public string? PickRandomGenericLookupValueByTypeWeighted(string? type, string? filter = "random")
     {
         var normalizedType = (type ?? string.Empty).Trim();
+        var normalizedFilter = string.IsNullOrWhiteSpace(filter) ? "random" : filter.Trim();
         if (string.IsNullOrWhiteSpace(normalizedType))
         {
             return null;
@@ -8014,8 +8018,9 @@ SELECT
 FROM GenericLookup
 WHERE IsActive = 1
   AND lower(Type) = lower(@type)
+  AND lower(COALESCE(NULLIF(trim(filter), ''), 'random')) LIKE '%' || lower(@filter) || '%'
   AND Value IS NOT NULL
-  AND trim(Value) <> '';", new { type = normalizedType }).ToList();
+  AND trim(Value) <> '';", new { type = normalizedType, filter = normalizedFilter }).ToList();
 
         if (rows.Count == 0)
         {
@@ -8055,6 +8060,7 @@ WHERE IsActive = 1
         var normalizedCode = (entry.Code ?? string.Empty).Trim();
         var normalizedValue = (entry.Value ?? string.Empty).Trim();
         var normalizedDescription = string.IsNullOrWhiteSpace(entry.Description) ? null : entry.Description.Trim();
+        var normalizedFilter = string.IsNullOrWhiteSpace(entry.Filter) ? "random" : entry.Filter.Trim();
 
         if (string.IsNullOrWhiteSpace(normalizedType))
             throw new ArgumentException("Type obbligatorio", nameof(entry.Type));
@@ -8078,6 +8084,7 @@ SET
     Code = @code,
     Value = @value,
     Description = @description,
+    filter = @filter,
     sort_order = @sortOrder,
     IsActive = @isActive,
     Weight = @weight,
@@ -8090,6 +8097,7 @@ WHERE Id = @id;",
                     code = normalizedCode,
                     value = normalizedValue,
                     description = normalizedDescription,
+                    filter = normalizedFilter,
                     sortOrder = entry.SortOrder,
                     isActive = entry.IsActive ? 1 : 0,
                     weight = entry.Weight
@@ -8105,10 +8113,10 @@ WHERE Id = @id;",
         var id = conn.ExecuteScalar<long>(
             @"
 INSERT INTO GenericLookup (
-    Type, Code, Value, Description, sort_order, IsActive, Weight, CreatedAt, UpdatedAt
+    Type, Code, Value, Description, filter, sort_order, IsActive, Weight, CreatedAt, UpdatedAt
 )
 VALUES (
-    @type, @code, @value, @description, @sortOrder, @isActive, @weight, datetime('now'), datetime('now')
+    @type, @code, @value, @description, @filter, @sortOrder, @isActive, @weight, datetime('now'), datetime('now')
 );
 SELECT last_insert_rowid();",
             new
@@ -8117,6 +8125,7 @@ SELECT last_insert_rowid();",
                 code = normalizedCode,
                 value = normalizedValue,
                 description = normalizedDescription,
+                filter = normalizedFilter,
                 sortOrder = entry.SortOrder,
                 isActive = entry.IsActive ? 1 : 0,
                 weight = entry.Weight

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyGenerator.Models;
@@ -196,6 +197,7 @@ namespace TinyGenerator.Services
 
         private static string BuildUserPrompt(string scope, List<LogEntry> logs, string? agentPrompt)
         {
+            var compact = BuildCompactPayload(logs);
             var sb = new StringBuilder();
             if (!string.IsNullOrWhiteSpace(agentPrompt))
             {
@@ -203,33 +205,350 @@ namespace TinyGenerator.Services
                 sb.AppendLine();
             }
 
-            sb.AppendLine($"[THREAD_SCOPE] {scope}");
-            sb.AppendLine($"[THREAD_ID] {logs.First().ThreadId ?? 0}");
-            sb.AppendLine("Analizza i log seguenti e fornisci una sintesi in italiano con eventuali errori critici e azioni consigliate.");
+            sb.AppendLine($"[COMMAND] {scope}");
             sb.AppendLine();
-            sb.AppendLine("=== LOGS ===");
-
-            int index = 1;
-            foreach (var entry in logs.Take(200))
+            sb.AppendLine($"[THREAD_ID] {logs.First().ThreadId ?? 0}");
+            sb.AppendLine();
+            sb.AppendLine("[ERROR_SUMMARY]");
+            if (compact.ErrorSummaryLines.Count == 0)
             {
-                var message = Truncate(entry.Message ?? string.Empty, 600);
-                sb.AppendLine($"{index:000}. {entry.Timestamp:yyyy-MM-dd HH:mm:ss} | {entry.Level} | {entry.Category} | {message}");
-                if (!string.IsNullOrWhiteSpace(entry.Exception))
+                sb.AppendLine("none");
+            }
+            else
+            {
+                foreach (var line in compact.ErrorSummaryLines)
                 {
-                    sb.AppendLine($"     EXCEPTION: {Truncate(entry.Exception!, 400)}");
+                    sb.AppendLine(line);
                 }
-                index++;
             }
+            sb.AppendLine();
+            sb.AppendLine("[FINAL_SUCCESS]");
+            sb.AppendLine(compact.FinalSuccess ? "true" : "false");
+            sb.AppendLine();
+            sb.AppendLine("[RETRIES]");
+            sb.AppendLine(compact.TotalRetries.ToString());
+            sb.AppendLine();
+            sb.AppendLine("[REPEATED_ERRORS]");
+            sb.AppendLine(compact.RepeatedErrors ? "true" : "false");
+            sb.AppendLine();
 
-            if (logs.Count > 200)
+            if (compact.KeyEvents.Count > 0)
             {
-                sb.AppendLine($"[... ulteriori {logs.Count - 200} log troncati ...]");
+                sb.AppendLine("[KEY_EVENTS]");
+                foreach (var evt in compact.KeyEvents)
+                {
+                    sb.AppendLine(evt);
+                }
+                sb.AppendLine();
             }
 
-            sb.AppendLine("=== END LOGS ===");
-            sb.AppendLine("Fornisci la tua analisi in testo continuo (nessun JSON).");
+            if (!string.IsNullOrWhiteSpace(compact.LastValidResponse))
+            {
+                sb.AppendLine("[LAST_VALID_RESPONSE]");
+                sb.AppendLine(compact.LastValidResponse);
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("[NOTES]");
+            sb.AppendLine($"source_logs={logs.Count}, considered_logs={compact.ConsideredLogs}");
+            sb.AppendLine("Analizza i dati compatti sopra riportati e rispondi in italiano, senza inventare dettagli.");
 
             return sb.ToString();
+        }
+
+        private sealed class CompactPayload
+        {
+            public List<string> ErrorSummaryLines { get; } = new();
+            public List<string> KeyEvents { get; } = new();
+            public bool FinalSuccess { get; set; }
+            public int TotalRetries { get; set; }
+            public bool RepeatedErrors { get; set; }
+            public string? LastValidResponse { get; set; }
+            public int ConsideredLogs { get; set; }
+        }
+
+        private static CompactPayload BuildCompactPayload(List<LogEntry> logs)
+        {
+            var payload = new CompactPayload();
+            if (logs == null || logs.Count == 0)
+                return payload;
+
+            var responseLogs = logs.Where(IsResponseLog).ToList();
+            payload.TotalRetries = Math.Max(0, responseLogs.Count - 1);
+
+            var lastResponseWithResult = responseLogs
+                .LastOrDefault(l => !string.IsNullOrWhiteSpace(l.Result));
+            payload.FinalSuccess = string.Equals(lastResponseWithResult?.Result?.Trim(), "SUCCESS", StringComparison.OrdinalIgnoreCase);
+
+            var lastSuccess = responseLogs.LastOrDefault(l =>
+                string.Equals(l.Result?.Trim(), "SUCCESS", StringComparison.OrdinalIgnoreCase));
+            if (lastSuccess != null)
+            {
+                payload.LastValidResponse = NormalizeInlineText(lastSuccess.Message, 180);
+            }
+
+            var ruleTagCounts = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+            var genericCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var keyEventCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in logs)
+            {
+                if (!ShouldIncludeForCompactAnalysis(entry))
+                    continue;
+
+                payload.ConsideredLogs++;
+
+                var reasons = EnumerateReasonSources(entry).ToList();
+                if (reasons.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var reason in reasons)
+                {
+                    if (TryExtractRuleAndTags(reason, out var ruleKey, out var tags))
+                    {
+                        if (!ruleTagCounts.TryGetValue(ruleKey, out var tagCounts))
+                        {
+                            tagCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                            ruleTagCounts[ruleKey] = tagCounts;
+                        }
+
+                        foreach (var tag in tags)
+                        {
+                            if (string.IsNullOrWhiteSpace(tag))
+                                continue;
+                            tagCounts[tag] = tagCounts.TryGetValue(tag, out var curr) ? curr + 1 : 1;
+                        }
+                        continue;
+                    }
+
+                    var genericKey = Truncate(NormalizeInlineText(reason, 120), 80);
+                    if (string.IsNullOrWhiteSpace(genericKey))
+                        continue;
+                    genericCounts[genericKey] = genericCounts.TryGetValue(genericKey, out var currGeneric) ? currGeneric + 1 : 1;
+                }
+            }
+
+            var orderedRuleKeys = ruleTagCounts.Keys
+                .OrderBy(k => RuleSortWeight(k))
+                .ThenBy(k => k, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var ruleKey in orderedRuleKeys)
+            {
+                var topTags = ruleTagCounts[ruleKey]
+                    .OrderByDescending(kv => kv.Value)
+                    .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                    .Take(6)
+                    .Select(kv => $"{kv.Key} (x{kv.Value})")
+                    .ToList();
+                if (topTags.Count > 0)
+                {
+                    payload.ErrorSummaryLines.Add($"{ruleKey}: {string.Join(", ", topTags)}");
+                }
+            }
+
+            var topGeneric = genericCounts
+                .OrderByDescending(kv => kv.Value)
+                .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .Select(kv => $"{kv.Key} (x{kv.Value})")
+                .ToList();
+            if (topGeneric.Count > 0)
+            {
+                payload.ErrorSummaryLines.Add($"GEN: {string.Join("; ", topGeneric)}");
+            }
+
+            payload.RepeatedErrors = ruleTagCounts.Values.Any(tags => tags.Values.Any(v => v >= 3))
+                || genericCounts.Values.Any(v => v >= 3);
+
+            foreach (var rawEvent in logs
+                         .Where(ShouldIncludeForCompactAnalysis)
+                         .Select(ComposeKeyEvent)
+                         .Where(v => !string.IsNullOrWhiteSpace(v)))
+            {
+                var key = rawEvent!;
+                keyEventCounts[key] = keyEventCounts.TryGetValue(key, out var curr) ? curr + 1 : 1;
+            }
+
+            payload.KeyEvents.AddRange(
+                keyEventCounts
+                    .OrderByDescending(kv => kv.Value)
+                    .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                    .Take(8)
+                    .Select(kv => $"{kv.Key} (x{kv.Value})"));
+
+            return payload;
+        }
+
+        private static bool ShouldIncludeForCompactAnalysis(LogEntry entry)
+        {
+            if (entry == null)
+                return false;
+            if (IsRequestLog(entry))
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(entry.Exception))
+                return true;
+            if (!string.IsNullOrWhiteSpace(entry.ResultFailReason))
+                return true;
+
+            var result = entry.Result?.Trim();
+            if (string.Equals(result, "FAILED", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var level = entry.Level?.Trim();
+            if (string.Equals(level, "ERROR", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(level, "CRITICAL", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return false;
+        }
+
+        private static bool IsRequestLog(LogEntry entry)
+        {
+            var category = entry.Category?.Trim() ?? string.Empty;
+            return category.Equals("ModelRequest", StringComparison.OrdinalIgnoreCase)
+                || category.Equals("ModelPrompt", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsResponseLog(LogEntry entry)
+        {
+            var category = entry.Category?.Trim() ?? string.Empty;
+            return category.Equals("ModelResponse", StringComparison.OrdinalIgnoreCase)
+                || category.Equals("ModelCompletion", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static IEnumerable<string> EnumerateReasonSources(LogEntry entry)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.ResultFailReason))
+            {
+                yield return entry.ResultFailReason!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.Exception))
+            {
+                yield return entry.Exception!;
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.Message))
+            {
+                var message = entry.Message!;
+                if (IsPotentialReasonMessage(message))
+                {
+                    yield return message;
+                }
+            }
+        }
+
+        private static bool IsPotentialReasonMessage(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+                return false;
+            return message.Contains("reason", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("errore", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("error", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("violat", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("invalid", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryExtractRuleAndTags(string reason, out string ruleKey, out List<string> tags)
+        {
+            ruleKey = string.Empty;
+            tags = new List<string>();
+
+            if (string.IsNullOrWhiteSpace(reason))
+                return false;
+
+            var normalized = NormalizeInlineText(reason, 400);
+            var match = Regex.Match(normalized, @"\b(?:regola|rule|r)\s*[:#-]?\s*(3|5|6)\b", RegexOptions.IgnoreCase);
+            if (!match.Success)
+                return false;
+
+            ruleKey = $"R{match.Groups[1].Value}";
+
+            var sourceForTags = normalized;
+            var colonIdx = normalized.IndexOf(':');
+            if (colonIdx >= 0 && colonIdx + 1 < normalized.Length)
+            {
+                sourceForTags = normalized.Substring(colonIdx + 1);
+            }
+
+            var parts = sourceForTags
+                .Split(new[] { ',', ';', '|', '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+            var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var raw in parts)
+            {
+                var tag = NormalizeTag(raw);
+                if (string.IsNullOrWhiteSpace(tag))
+                    continue;
+                if (unique.Add(tag))
+                {
+                    tags.Add(tag);
+                }
+            }
+
+            if (tags.Count == 0)
+            {
+                tags.Add("generic");
+            }
+
+            return true;
+        }
+
+        private static string NormalizeTag(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input))
+                return string.Empty;
+
+            var token = NormalizeInlineText(input, 40).ToLowerInvariant();
+            token = token.Replace("presenza di", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("presence of", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("tag", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Replace("tags", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Trim();
+            token = Regex.Replace(token, @"^[\W_]+|[\W_]+$", string.Empty);
+            if (token.Length < 2)
+                return string.Empty;
+            if (token.Length > 24)
+                return string.Empty;
+            if (!Regex.IsMatch(token, @"^[a-z0-9_-]+$"))
+                return string.Empty;
+            if (Regex.IsMatch(token, @"^(rule|regola|r3|r5|r6|violazione|invalid)$"))
+                return string.Empty;
+            return token;
+        }
+
+        private static string ComposeKeyEvent(LogEntry entry)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.ResultFailReason))
+                return Truncate($"fail_reason: {NormalizeInlineText(entry.ResultFailReason, 90)}", 100);
+            if (!string.IsNullOrWhiteSpace(entry.Exception))
+                return Truncate($"exception: {NormalizeInlineText(entry.Exception, 90)}", 100);
+            return Truncate($"event: {NormalizeInlineText(entry.Message, 90)}", 100);
+        }
+
+        private static int RuleSortWeight(string ruleKey)
+        {
+            return ruleKey switch
+            {
+                "R3" => 1,
+                "R5" => 2,
+                "R6" => 3,
+                _ => 99
+            };
+        }
+
+        private static string NormalizeInlineText(string? value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var cleaned = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            cleaned = Regex.Replace(cleaned, @"\s+", " ");
+            return Truncate(cleaned, maxLength);
         }
 
         private static string BuildFailureSystemPrompt()

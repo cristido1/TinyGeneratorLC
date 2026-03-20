@@ -61,7 +61,7 @@ namespace TinyGenerator.Pages.Agents
                     loadRatio = mr.LoadRatio,
                     successRate = (mr.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                     lastUse = FormatLastUse(mr.LastUse),
-                    enabled = mr.Enabled,
+                    enabled = mr.IsActive,
                     thinking = mr.Thinking
                 })
                 .ToList();
@@ -104,7 +104,7 @@ namespace TinyGenerator.Pages.Agents
                 return new JsonResult(new { ok = false, error = $"Nessun agente disponibile per il ruolo '{roleCode}'." }) { StatusCode = 400 };
             }
 
-            var now = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+            var now = DateTime.UtcNow;
             var entity = new ModelRole
             {
                 ModelId = input.ModelId,
@@ -114,7 +114,7 @@ namespace TinyGenerator.Pages.Agents
                 TopP = input.TopP,
                 TopK = input.TopK,
                 Thinking = input.Thinking,
-                Enabled = input.Enabled,
+                IsActive = input.Enabled,
                 CreatedAt = now,
                 UpdatedAt = now
             };
@@ -154,7 +154,7 @@ namespace TinyGenerator.Pages.Agents
                         loadRatio = hydrated.LoadRatio,
                         successRate = (hydrated.SuccessRate * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                         lastUse = FormatLastUse(hydrated.LastUse),
-                        enabled = hydrated.Enabled,
+                        enabled = hydrated.IsActive,
                         thinking = hydrated.Thinking
                     }
             });
@@ -183,7 +183,7 @@ namespace TinyGenerator.Pages.Agents
                 $"Top-P: {(mr.TopP.HasValue ? mr.TopP.Value.ToString("0.00") : "-")}\n" +
                 $"Top-K: {(mr.TopK.HasValue ? mr.TopK.Value.ToString() : "-")}\n" +
                 $"Thinking: {FormatThinking(mr.Thinking)}\n" +
-                $"Enabled: {(mr.Enabled ? "Yes" : "No")}\n" +
+                $"Enabled: {(mr.IsActive ? "Yes" : "No")}\n" +
                 $"Ultimo uso: {FormatLastUse(mr.LastUse)}\n" +
                 $"Prompt tokens: {mr.TotalPromptTokens}\n" +
                 $"Output tokens: {mr.TotalOutputTokens}\n" +
@@ -207,7 +207,7 @@ namespace TinyGenerator.Pages.Agents
                 instructions,
                 topP = mr.TopP,
                 topK = mr.TopK,
-                enabled = mr.Enabled,
+                enabled = mr.IsActive,
                 thinking = mr.Thinking
             });
         }
@@ -288,11 +288,11 @@ namespace TinyGenerator.Pages.Agents
                 return new JsonResult(new { ok = false, error = "Not found" }) { StatusCode = 404 };
             }
 
-            entity.Enabled = input.Enabled;
-            entity.UpdatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            entity.IsActive = input.Enabled;
+            entity.UpdatedAt = DateTime.UtcNow;
             _context.SaveChanges();
 
-            return new JsonResult(new { ok = true, enabled = entity.Enabled });
+            return new JsonResult(new { ok = true, enabled = entity.IsActive });
         }
 
         public IActionResult OnPostUpdate([FromBody] UpdateRequest input)
@@ -312,8 +312,8 @@ namespace TinyGenerator.Pages.Agents
             entity.TopP = input.TopP;
             entity.TopK = input.TopK;
             entity.Thinking = input.Thinking;
-            entity.Enabled = input.Enabled;
-            entity.UpdatedAt = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            entity.IsActive = input.Enabled;
+            entity.UpdatedAt = DateTime.UtcNow;
             _context.SaveChanges();
 
             return new JsonResult(new { ok = true });

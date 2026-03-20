@@ -19,6 +19,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
     private readonly string? _toneHint;
     private readonly string? _constraintsHint;
     private readonly IReadOnlyList<string> _lookupHintTypes;
+    private readonly string _lookupFilter;
 
     private static readonly string[] DefaultLookupHintTypes =
     {
@@ -41,7 +42,8 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         string? genreHint = null,
         string? toneHint = null,
         string? constraintsHint = null,
-        IEnumerable<string>? lookupHintTypes = null)
+        IEnumerable<string>? lookupHintTypes = null,
+        string? lookupFilter = "random")
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _callCenter = callCenter ?? throw new ArgumentNullException(nameof(callCenter));
@@ -53,6 +55,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         _toneHint = toneHint;
         _constraintsHint = constraintsHint;
         _lookupHintTypes = NormalizeLookupHintTypes(lookupHintTypes);
+        _lookupFilter = NormalizeLookupFilter(lookupFilter);
     }
 
     public bool Batch => true;
@@ -185,7 +188,7 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         var suggestions = new List<(string Type, string Value)>();
         foreach (var type in _lookupHintTypes)
         {
-            var picked = _database.PickRandomGenericLookupValueByTypeWeighted(type);
+            var picked = _database.PickRandomGenericLookupValueByTypeWeighted(type, _lookupFilter);
             if (string.IsNullOrWhiteSpace(picked))
             {
                 continue;
@@ -246,6 +249,22 @@ public sealed class GenerateNrePromptSuggestionCommand : ICommand
         }
 
         return normalized;
+    }
+
+    private static string NormalizeLookupFilter(string? filter)
+    {
+        var normalized = string.IsNullOrWhiteSpace(filter)
+            ? "random"
+            : filter.Trim().ToLowerInvariant();
+
+        return normalized switch
+        {
+            "military" => "military",
+            "militar" => "military",
+            "religious" => "religious",
+            "espionage" => "espionage",
+            _ => "random"
+        };
     }
 
     private static string MapLookupTypeLabel(string type)

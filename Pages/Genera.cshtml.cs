@@ -333,11 +333,11 @@ public class GeneraModel : PageModel
     {
         if (string.IsNullOrWhiteSpace(Prompt))
         {
-            return BadRequest(new { error = "Il prompt è obbligatorio." });
+            return BadRequest(new { error = "Il prompt Ã¨ obbligatorio." });
         }
         if (string.IsNullOrWhiteSpace(Title))
         {
-            return BadRequest(new { error = "Il titolo è obbligatorio." });
+            return BadRequest(new { error = "Il titolo Ã¨ obbligatorio." });
         }
         if (WriterAgentId <= 0)
         {
@@ -391,7 +391,7 @@ public class GeneraModel : PageModel
             }
         );
 
-        _customLogger.Append(genId.ToString(), "🟢 Multi-step generation enqueued");
+        _customLogger.Append(genId.ToString(), "ðŸŸ¢ Multi-step generation enqueued");
 
         try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Generation started", "info"); } catch { }
 
@@ -416,7 +416,7 @@ public class GeneraModel : PageModel
     {
         if (string.IsNullOrWhiteSpace(Prompt))
         {
-            return BadRequest(new { error = "Il prompt è obbligatorio." });
+            return BadRequest(new { error = "Il prompt Ã¨ obbligatorio." });
         }
 
         if (_orchestrator == null)
@@ -453,7 +453,7 @@ public class GeneraModel : PageModel
             }
         );
 
-        _customLogger.Append(genId.ToString(), "🎬 Pipeline completo avviato");
+        _customLogger.Append(genId.ToString(), "ðŸŽ¬ Pipeline completo avviato");
 
         try { await _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "Full pipeline started", "info"); } catch { }
 
@@ -464,11 +464,11 @@ public class GeneraModel : PageModel
     {
         if (string.IsNullOrWhiteSpace(CinoTitle))
         {
-            return BadRequest(new { error = "Il titolo è obbligatorio." });
+            return BadRequest(new { error = "Il titolo Ã¨ obbligatorio." });
         }
         if (string.IsNullOrWhiteSpace(CinoPrompt))
         {
-            return BadRequest(new { error = "Il prompt è obbligatorio." });
+            return BadRequest(new { error = "Il prompt Ã¨ obbligatorio." });
         }
 
         var genId = Guid.NewGuid();
@@ -593,8 +593,8 @@ public class GeneraModel : PageModel
             return BadRequest(new { error = error ?? "Failed to start state-driven story" });
         }
 
-        _customLogger.Append(genId.ToString(), $"✅ Story creata. storyId={storyId}", "success");
-        _customLogger.Append(genId.ToString(), "✍️ Generazione primo chunk...", "info");
+        _customLogger.Append(genId.ToString(), $"âœ… Story creata. storyId={storyId}", "success");
+        _customLogger.Append(genId.ToString(), "âœï¸ Generazione primo chunk...", "info");
 
         _dispatcher.Enqueue(
             "StateDrivenNextChunk",
@@ -615,27 +615,27 @@ public class GeneraModel : PageModel
                     var result = await chunkCmd.ExecuteAsync(ctx.CancellationToken);
                     if (!result.Success)
                     {
-                        _customLogger.Append(genId.ToString(), "❌ " + result.Message, "error");
+                        _customLogger.Append(genId.ToString(), "âŒ " + result.Message, "error");
                         await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                         _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                         return result;
                     }
 
-                    _customLogger.Append(genId.ToString(), "✅ " + result.Message, "success");
+                    _customLogger.Append(genId.ToString(), "âœ… " + result.Message, "success");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), $"storyId={storyId}");
                     _ = _customLogger.BroadcastTaskComplete(genId, "completed");
                     return result;
                 }
                 catch (OperationCanceledException)
                 {
-                    _customLogger.Append(genId.ToString(), "⚠️ Operazione annullata.", "warning");
+                    _customLogger.Append(genId.ToString(), "âš ï¸ Operazione annullata.", "warning");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
                     _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
                     return new CommandResult(false, "cancelled");
                 }
                 catch (Exception ex)
                 {
-                    _customLogger.Append(genId.ToString(), "❌ Errore: " + ex.Message, "error");
+                    _customLogger.Append(genId.ToString(), "âŒ Errore: " + ex.Message, "error");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                     return new CommandResult(false, ex.Message);
@@ -654,7 +654,7 @@ public class GeneraModel : PageModel
             },
             priority: 2);
 
-        _customLogger.Append(genId.ToString(), "🟢 Episodio state-driven accodato");
+        _customLogger.Append(genId.ToString(), "ðŸŸ¢ Episodio state-driven accodato");
         try { _ = _customLogger.NotifyGroupAsync(genId.ToString(), "Started", "State-driven episode started", "info"); } catch { }
 
         StateStoryId = storyId;
@@ -706,8 +706,8 @@ public class GeneraModel : PageModel
         var minutes = StateTargetMinutes <= 0 ? 20 : StateTargetMinutes;
         var wpm = StateWordsPerMinute <= 0 ? 150 : StateWordsPerMinute;
 
-        _customLogger.Append(genId.ToString(), $"✅ Story creata. storyId={storyId}", "success");
-        _customLogger.Append(genId.ToString(), $"▶️ Avvio generazione episodio completo (~{minutes} min TTS)", "info");
+        _customLogger.Append(genId.ToString(), $"âœ… Story creata. storyId={storyId}", "success");
+        _customLogger.Append(genId.ToString(), $"â–¶ï¸ Avvio generazione episodio completo (~{minutes} min TTS)", "info");
 
         _dispatcher.Enqueue(
             "StateDrivenEpisodeAuto",
@@ -731,27 +731,27 @@ public class GeneraModel : PageModel
                     var result = await cmd.ExecuteAsync(runIdForProgress: genId.ToString(), ct: ctx.CancellationToken);
                     if (!result.Success)
                     {
-                        _customLogger.Append(genId.ToString(), "❌ " + result.Message, "error");
+                        _customLogger.Append(genId.ToString(), "âŒ " + result.Message, "error");
                         await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                         _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                         return result;
                     }
 
-                    _customLogger.Append(genId.ToString(), "✅ " + result.Message, "success");
+                    _customLogger.Append(genId.ToString(), "âœ… " + result.Message, "success");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "completed");
                     return result;
                 }
                 catch (OperationCanceledException)
                 {
-                    _customLogger.Append(genId.ToString(), "⚠️ Operazione annullata.", "warning");
+                    _customLogger.Append(genId.ToString(), "âš ï¸ Operazione annullata.", "warning");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
                     _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
                     return new CommandResult(false, "cancelled");
                 }
                 catch (Exception ex)
                 {
-                    _customLogger.Append(genId.ToString(), "❌ Errore: " + ex.Message, "error");
+                    _customLogger.Append(genId.ToString(), "âŒ Errore: " + ex.Message, "error");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                     return new CommandResult(false, ex.Message);
@@ -790,7 +790,7 @@ public class GeneraModel : PageModel
 
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
-        _customLogger.Append(genId.ToString(), $"✍️ Generazione chunk successivo per storyId={StateStoryId} (chunkIndex={snap.CurrentChunkIndex})");
+        _customLogger.Append(genId.ToString(), $"âœï¸ Generazione chunk successivo per storyId={StateStoryId} (chunkIndex={snap.CurrentChunkIndex})");
 
         _dispatcher.Enqueue(
             "StateDrivenNextChunk",
@@ -811,27 +811,27 @@ public class GeneraModel : PageModel
                     var result = await cmd.ExecuteAsync(ctx.CancellationToken);
                     if (!result.Success)
                     {
-                        _customLogger.Append(genId.ToString(), "❌ " + result.Message, "error");
+                        _customLogger.Append(genId.ToString(), "âŒ " + result.Message, "error");
                         await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                         _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                         return result;
                     }
 
-                    _customLogger.Append(genId.ToString(), "✅ " + result.Message, "success");
+                    _customLogger.Append(genId.ToString(), "âœ… " + result.Message, "success");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "completed");
                     return result;
                 }
                 catch (OperationCanceledException)
                 {
-                    _customLogger.Append(genId.ToString(), "⚠️ Operazione annullata.", "warning");
+                    _customLogger.Append(genId.ToString(), "âš ï¸ Operazione annullata.", "warning");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
                     _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
                     return new CommandResult(false, "cancelled");
                 }
                 catch (Exception ex)
                 {
-                    _customLogger.Append(genId.ToString(), "❌ Errore: " + ex.Message, "error");
+                    _customLogger.Append(genId.ToString(), "âŒ Errore: " + ex.Message, "error");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                     return new CommandResult(false, ex.Message);
@@ -891,7 +891,7 @@ public class GeneraModel : PageModel
 
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
-        _customLogger.Append(genId.ToString(), "🧠 NRE accodato");
+        _customLogger.Append(genId.ToString(), "ðŸ§  NRE accodato");
 
         var cmd = new RunNreCommand(
             title: string.IsNullOrWhiteSpace(NreTitle) ? "NRE Story" : NreTitle.Trim(),
@@ -930,7 +930,7 @@ public class GeneraModel : PageModel
     {
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
-        _customLogger.Append(genId.ToString(), "💡 Accodo suggerimento prompt NRE (batch)...");
+        _customLogger.Append(genId.ToString(), "ðŸ’¡ Accodo suggerimento prompt NRE (batch)...");
 
         var cmd = new GenerateNrePromptSuggestionCommand(
             database: _database,
@@ -941,7 +941,8 @@ public class GeneraModel : PageModel
             settingHint: null,
             genreHint: null,
             toneHint: null,
-            constraintsHint: null);
+            constraintsHint: null,
+            lookupFilter: "random");
 
         _dispatcher.Enqueue(
             cmd,
@@ -962,34 +963,37 @@ public class GeneraModel : PageModel
     {
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
-        _customLogger.Append(genId.ToString(), "🚀 Accodo suggerimento NRE (flotta spaziale italiana)...");
-
-        var baseSetting = "flotta spaziale militare italiana, teatro orbitale e profondo spazio, catena di comando navale";
-        var baseTheme = "operazione militare ad alto rischio, crisi strategica interplanetaria, lealtà e disciplina sotto pressione";
-        var baseGenre = "fantascienza militare, thriller bellico, space opera tattica";
-        var baseTone = "teso, realistico, disciplinato, epico controllato";
-        var baseConstraints = "includi le navi Colombo, Giovanni delle Bande Nere, Thaon di Revel, coerenza militare, terminologia navale";
-
-        string MergeHints(string? userValue, string fixedValue)
+        _customLogger.Append(genId.ToString(), "Accodo suggerimento NRE (flotta spaziale italiana)...");
+        string? PickMilitaryLookup(string type)
         {
-            var user = string.IsNullOrWhiteSpace(userValue) ? null : userValue.Trim();
-            return string.IsNullOrWhiteSpace(user)
-                ? fixedValue
-                : $"{fixedValue}, {user}";
+            var value = _database.PickRandomGenericLookupValueByTypeWeighted(type, "military");
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         }
-
+        var themeHint = PickMilitaryLookup("THEME_CORE");
+        var settingHint = PickMilitaryLookup("SETTING");
+        var genreHint = PickMilitaryLookup("GENRE");
+        var protagonistHint = PickMilitaryLookup("PROTAGONIST");
+        var antagonistHint = PickMilitaryLookup("ANTAGONIST");
+        var conflictHint = PickMilitaryLookup("CONFLICT");
+        var twistHint = PickMilitaryLookup("TWIST");
+        var constraintsParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(protagonistHint)) constraintsParts.Add($"Protagonista: {protagonistHint}");
+        if (!string.IsNullOrWhiteSpace(antagonistHint)) constraintsParts.Add($"Antagonista: {antagonistHint}");
+        if (!string.IsNullOrWhiteSpace(conflictHint)) constraintsParts.Add($"Conflitto: {conflictHint}");
+        if (!string.IsNullOrWhiteSpace(twistHint)) constraintsParts.Add($"Twist: {twistHint}");
+        var constraintsHint = constraintsParts.Count > 0 ? string.Join("; ", constraintsParts) : null;
         var cmd = new GenerateNrePromptSuggestionCommand(
             database: _database,
             callCenter: _callCenter,
             options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
             logger: _customLogger,
-            themeHint: MergeHints(NreTheme, baseTheme),
-            settingHint: MergeHints(NreSetting, baseSetting),
-            genreHint: MergeHints(NreGenre, baseGenre),
-            toneHint: MergeHints(NreTone, baseTone),
-            constraintsHint: MergeHints(NreConstraints, baseConstraints),
-            lookupHintTypes: new[] { "THEME_CORE", "CONFLICT", "ANTAGONIST", "TWIST" });
-
+            themeHint: themeHint,
+            settingHint: settingHint,
+            genreHint: genreHint,
+            toneHint: null,
+            constraintsHint: constraintsHint,
+            lookupHintTypes: new[] { "THEME_CORE", "SETTING", "GENRE", "PROTAGONIST", "ANTAGONIST", "CONFLICT", "TWIST" },
+            lookupFilter: "military");
         _dispatcher.Enqueue(
             cmd,
             runId: genId.ToString(),
@@ -1001,7 +1005,6 @@ public class GeneraModel : PageModel
                 ["transparent"] = "1"
             },
             priority: 2);
-
         return new JsonResult(new { id = genId.ToString() });
     }
 
@@ -1011,24 +1014,39 @@ public class GeneraModel : PageModel
         _customLogger.Start(genId.ToString());
         _customLogger.Append(genId.ToString(), "Accodo suggerimento NRE religioso (Vaticano horror)...");
 
-        var baseTheme = "sin, guilt, moral judgment, temptation, deception by evil masked as innocence, crisis of faith";
-        var baseSetting = "Vatican secret archives, forbidden sealed rooms, hidden religious order of monks priests inquisitors archivists, ritual ancient underground spaces linked to infernal places";
-        var baseGenre = "religious horror, modern creepypasta, psychological dread, secret Vatican conspiracy";
-        var baseTone = "serious realistic voice, first person narrative in English, slow burn escalating tension, restrained but disturbing descriptions";
-        var baseConstraints =
-            "length 1200-1800 words; strict 8-part structure: official assignment, explicit rules with at least 3 rules, routine, anomaly, temptation voice, rule violation, consequences and punishment, unsettling ending without full redemption; avoid explicit monster descriptions and cheap jump scares; output only the story";
+        string? PickReligiousLookup(string type)
+        {
+            var value = _database.PickRandomGenericLookupValueByTypeWeighted(type, "religious");
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        var themeHint = PickReligiousLookup("THEME_CORE");
+        var settingHint = PickReligiousLookup("SETTING");
+        var genreHint = PickReligiousLookup("GENRE");
+        var protagonistHint = PickReligiousLookup("PROTAGONIST");
+        var antagonistHint = PickReligiousLookup("ANTAGONIST");
+        var conflictHint = PickReligiousLookup("CONFLICT");
+        var twistHint = PickReligiousLookup("TWIST");
+
+        var constraintsParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(protagonistHint)) constraintsParts.Add($"Protagonista: {protagonistHint}");
+        if (!string.IsNullOrWhiteSpace(antagonistHint)) constraintsParts.Add($"Antagonista: {antagonistHint}");
+        if (!string.IsNullOrWhiteSpace(conflictHint)) constraintsParts.Add($"Conflitto: {conflictHint}");
+        if (!string.IsNullOrWhiteSpace(twistHint)) constraintsParts.Add($"Twist: {twistHint}");
+        var constraintsHint = constraintsParts.Count > 0 ? string.Join("; ", constraintsParts) : null;
 
         var cmd = new GenerateNrePromptSuggestionCommand(
             database: _database,
             callCenter: _callCenter,
             options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
             logger: _customLogger,
-            themeHint: baseTheme,
-            settingHint: baseSetting,
-            genreHint: baseGenre,
-            toneHint: baseTone,
-            constraintsHint: baseConstraints,
-            lookupHintTypes: new[] { "THEME_CORE", "SETTING", "CONFLICT", "ANTAGONIST", "TWIST" });
+            themeHint: themeHint,
+            settingHint: settingHint,
+            genreHint: genreHint,
+            toneHint: null,
+            constraintsHint: constraintsHint,
+            lookupHintTypes: new[] { "THEME_CORE", "SETTING", "GENRE", "PROTAGONIST", "ANTAGONIST", "CONFLICT", "TWIST" },
+            lookupFilter: "religious");
 
         _dispatcher.Enqueue(
             cmd,
@@ -1042,6 +1060,55 @@ public class GeneraModel : PageModel
             },
             priority: 2);
 
+        return new JsonResult(new { id = genId.ToString() });
+    }
+
+    public IActionResult OnPostStartNrePromptSuggestionEspionage()
+    {
+        var genId = Guid.NewGuid();
+        _customLogger.Start(genId.ToString());
+        _customLogger.Append(genId.ToString(), "Accodo suggerimento NRE espionage (spy thriller)...");
+        string? PickEspionageLookup(string type)
+        {
+            var value = _database.PickRandomGenericLookupValueByTypeWeighted(type, "espionage");
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+        var themeHint = PickEspionageLookup("THEME_CORE");
+        var settingHint = PickEspionageLookup("SETTING");
+        var genreHint = PickEspionageLookup("GENRE");
+        var protagonistHint = PickEspionageLookup("PROTAGONIST");
+        var antagonistHint = PickEspionageLookup("ANTAGONIST");
+        var conflictHint = PickEspionageLookup("CONFLICT");
+        var twistHint = PickEspionageLookup("TWIST");
+        var constraintsParts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(protagonistHint)) constraintsParts.Add($"Protagonista: {protagonistHint}");
+        if (!string.IsNullOrWhiteSpace(antagonistHint)) constraintsParts.Add($"Antagonista: {antagonistHint}");
+        if (!string.IsNullOrWhiteSpace(conflictHint)) constraintsParts.Add($"Conflitto: {conflictHint}");
+        if (!string.IsNullOrWhiteSpace(twistHint)) constraintsParts.Add($"Twist: {twistHint}");
+        var constraintsHint = constraintsParts.Count > 0 ? string.Join("; ", constraintsParts) : null;
+        var cmd = new GenerateNrePromptSuggestionCommand(
+            database: _database,
+            callCenter: _callCenter,
+            options: Microsoft.Extensions.Options.Options.Create(_nreOptions),
+            logger: _customLogger,
+            themeHint: themeHint,
+            settingHint: settingHint,
+            genreHint: genreHint,
+            toneHint: null,
+            constraintsHint: constraintsHint,
+            lookupHintTypes: new[] { "THEME_CORE", "SETTING", "GENRE", "PROTAGONIST", "ANTAGONIST", "CONFLICT", "TWIST" },
+            lookupFilter: "espionage");
+        _dispatcher.Enqueue(
+            cmd,
+            runId: genId.ToString(),
+            metadata: new Dictionary<string, string>
+            {
+                ["operation"] = "nre_prompt_suggestion_espionage",
+                ["agentName"] = _nreOptions.PromptSuggestionAgentRole,
+                ["mode"] = "batch",
+                ["transparent"] = "1"
+            },
+            priority: 2);
         return new JsonResult(new { id = genId.ToString() });
     }
 
@@ -1110,11 +1177,11 @@ public class GeneraModel : PageModel
     {
         if (string.IsNullOrWhiteSpace(StateSingleTitle))
         {
-            return BadRequest(new { error = "Il titolo è obbligatorio." });
+            return BadRequest(new { error = "Il titolo Ã¨ obbligatorio." });
         }
         if (string.IsNullOrWhiteSpace(StateSinglePrompt))
         {
-            return BadRequest(new { error = "Il prompt è obbligatorio." });
+            return BadRequest(new { error = "Il prompt Ã¨ obbligatorio." });
         }
         if (StateSingleNarrativeProfileId <= 0)
         {
@@ -1133,7 +1200,7 @@ public class GeneraModel : PageModel
 
         var genId = Guid.NewGuid();
         _customLogger.Start(genId.ToString());
-        _customLogger.Append(genId.ToString(), "▶️ Avvio storia singola state-driven...", "info");
+        _customLogger.Append(genId.ToString(), "â–¶ï¸ Avvio storia singola state-driven...", "info");
 
         _dispatcher.Enqueue(
             "StateDrivenSingleStoryAuto",
@@ -1161,7 +1228,7 @@ public class GeneraModel : PageModel
                     var result = await cmd.ExecuteAsync(runIdForProgress: genId.ToString(), ct: ctx.CancellationToken);
                     if (!result.Success)
                     {
-                        _customLogger.Append(genId.ToString(), "❌ " + result.Message, "error");
+                        _customLogger.Append(genId.ToString(), "âŒ " + result.Message, "error");
                         await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                         _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                         return result;
@@ -1169,23 +1236,23 @@ public class GeneraModel : PageModel
 
                     if (cmd.StoryId > 0)
                     {
-                        _customLogger.Append(genId.ToString(), $"✅ storyId={cmd.StoryId}", "success");
+                        _customLogger.Append(genId.ToString(), $"âœ… storyId={cmd.StoryId}", "success");
                     }
-                    _customLogger.Append(genId.ToString(), "✅ " + result.Message, "success");
+                    _customLogger.Append(genId.ToString(), "âœ… " + result.Message, "success");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), result.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "completed");
                     return result;
                 }
                 catch (OperationCanceledException)
                 {
-                    _customLogger.Append(genId.ToString(), "⚠️ Operazione annullata.", "warning");
+                    _customLogger.Append(genId.ToString(), "âš ï¸ Operazione annullata.", "warning");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), "cancelled");
                     _ = _customLogger.BroadcastTaskComplete(genId, "cancelled");
                     return new CommandResult(false, "cancelled");
                 }
                 catch (Exception ex)
                 {
-                    _customLogger.Append(genId.ToString(), "❌ Errore: " + ex.Message, "error");
+                    _customLogger.Append(genId.ToString(), "âŒ Errore: " + ex.Message, "error");
                     await _customLogger.MarkCompletedAsync(genId.ToString(), ex.Message);
                     _ = _customLogger.BroadcastTaskComplete(genId, "failed");
                     return new CommandResult(false, ex.Message);
@@ -1295,3 +1362,4 @@ public class GeneraModel : PageModel
         return sb.ToString();
     }
 }
+
